@@ -1,0 +1,19 @@
+# Example input for: canvas assignments apply --course <ID> --file this.yaml
+#
+# Any Canvas assignment field can be included per item (see Canvas API docs
+# for "Assignments" -> create/update parameters). Matching to decide
+# create-vs-update is done by exact assignment name (case-insensitive).
+assignments:
+  - name: "Homework 1: Intro"
+    points_possible: 20
+    due_at: "2026-09-01T23:59:00-05:00"
+    description: "<p>Complete the intro exercises.</p>"
+    submission_types: ["online_upload"]
+    published: true
+
+  - name: "Homework 2: Loops"
+    points_possible: 20
+    due_at: "2026-09-08T23:59:00-05:00"
+    description: "<p>Complete the loops exercises.</p>"
+    submission_types: ["online_upload"]
+    published: true

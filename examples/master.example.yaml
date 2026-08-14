@@ -1,0 +1,307 @@
+# Master reference: every option each `apply` command understands, for
+# modules, pages, assignments, and announcements — audited directly against
+# Canvas LMS's source (the actual permitted-params lists each controller
+# uses), not just its docs, which are incomplete in a few places noted
+# below. Each command reads only its own top-level key and ignores the
+# rest, so this one file works against any of them:
+#
+#   python3 -m canvas_tools.cli assignments    apply --course ID --file master.example.yaml --dry-run
+#   python3 -m canvas_tools.cli pages          apply --course ID --file master.example.yaml --dry-run
+#   python3 -m canvas_tools.cli announcements  apply --course ID --file master.example.yaml --dry-run
+#   python3 -m canvas_tools.cli modules        apply --course ID --file master.example.yaml --dry-run
+#
+# This is meant to be read as a reference / copied from, not run blindly —
+# the modules section below links items (Assignment/Quiz/Discussion) that
+# only resolve if something with that exact title already exists in the
+# course (create it via `assignments apply` first, or the Canvas UI for
+# quizzes). Run with --dry-run to see what would happen before applying.
+#
+# *** `modules apply` on this file is DESTRUCTIVE against a real course. ***
+# Unlike assignments/pages/announcements, `modules apply` treats the file
+# as the exact, complete set of modules — a real module NOT named "Week 1"
+# or "Week 2" below would be DELETED outright by running this file for
+# real against a course that has other modules in it. Only ever run the
+# modules section of this file with --dry-run, or against a scratch/test
+# course, never for real against a course you care about. See the
+# "modules:" section's own comments further down for the full explanation.
+#
+# Every field below is marked REQUIRED or optional. "Required" means the
+# tool raises an error without it (or Canvas rejects the request).
+# Everything else is optional: omitted (or left blank — `field:` with no
+# value behaves identically to leaving the key out entirely) means "don't
+# touch this on update" / "don't send it on create". The one exception is
+# noted where it applies (page `todo_date` — see below).
+#
+# All matching is by exact title/name, case-insensitive: if it exists, the
+# item is updated; if not, it's created — EXCEPT modules and module items,
+# which are fully synced to match the file exactly, additions AND
+# removals (see the destructive-warning above and the modules: section
+# below); checkpoints are update-only (see the assignments: section).
+#
+# Each section ends with a "Documented by Canvas, not wired into this
+# tool" list — real fields that exist, deliberately left out because
+# they're gated behind account features this course may not have, need a
+# whole extra subsystem to be useful (grading schemes, sections), or are
+# genuinely inapplicable to the field's normal use. Listed so the gap is
+# visible rather than silent.
+
+assignments:
+  # Minimal example.
+  - name: "Homework 1: Intro"                   # REQUIRED — used to match an existing assignment, or as the name on create
+
+  # Every field `assignments apply` recognizes. Unlike pages/announcements
+  # below, assignment fields are NOT whitelisted — whatever keys you put
+  # here (besides `checkpoints`, `assignment_group`, `group_category`, and
+  # `rubric`, which are handled/resolved specially, see below) are sent
+  # straight through to Canvas's Assignments API, so any assignment field
+  # Canvas supports can be used even if it's not listed here.
+  - name: "Writing Assignment: Chapter 1"        # REQUIRED
+    description: "<p>Read the chapter and write a one-page response.</p>"  # optional — raw HTML, auto-cleaned of chat-paste cruft
+    position: 3                                   # optional — display order within its assignment group
+    points_possible: 20                          # optional
+    due_at: "2026-09-01T23:59:00-05:00"          # optional — ISO8601; omit entirely for checkpointed discussions (below) — the parent's due_at is always null there
+    unlock_at: "2026-08-25T00:00:00-05:00"       # optional
+    lock_at: "2026-09-08T23:59:00-05:00"         # optional
+    submission_types:                             # optional — full list: online_quiz, none, on_paper, discussion_topic,
+      - online_upload                            # external_tool, online_upload, online_text_entry, online_url,
+      - online_text_entry                        # media_recording, student_annotation, not_graded
+    allowed_extensions: ["doc", "docx", "pdf"]    # optional — restricts file types for online_upload; omit for no restriction
+    allowed_attempts: -1                          # optional — -1 (default) = unlimited, or a positive integer
+    grading_type: points                          # optional — points, percent, letter_grade, gpa_scale, pass_fail, not_graded
+    grading_standard_id: 12345                    # optional — a grading scheme's Canvas ID (only used with grading_type letter_grade/gpa_scale); not name-resolved by this tool, look the ID up in the Canvas UI
+    omit_from_final_grade: false                  # optional — true excludes this assignment from the final grade calculation
+    hide_in_gradebook: false                      # optional — true hides it from the gradebook entirely (distinct from omit_from_final_grade, which still shows it)
+    published: true                               # optional — defaults true on create
+    notify_of_update: false                       # optional — true notifies students this assignment changed
+    important_dates: false                        # optional — true surfaces this assignment's due date on the course pacing/important-dates views
+    freeze_on_copy: false                          # optional — true locks these fields against changes when the assignment is copied into another course
+    post_to_sis: false                             # optional — true includes this assignment in SIS grade export (only meaningful if your account uses SIS integration)
+    sis_assignment_id: null                        # optional — external SIS system's ID for this assignment (requires SIS-manage permission; silently dropped otherwise)
+    integration_id: null                           # optional — arbitrary third-party integration identifier
+    assignment_group: "Writing Assignments"       # optional — matched by name against the course's assignment groups; REQUIRED to exist already if given
+    rubric: "Weekly Writing Assignment Rubric"    # optional — matched by title against the course's rubrics (import one first, see `rubrics import`); REQUIRED to exist already if given
+    # remove_rubric: true                          # optional — detaches whatever rubric is currently attached. A distinct field from `rubric:`,
+                                                      # since blank/omitted `rubric:` means "don't touch" like everywhere else in this tool — put
+                                                      # this together with `rubric:` in the same entry to swap rubrics in one pass (detach old,
+                                                      # attach new). Confirmed safe: does not delete the old rubric even if this was its last use.
+    use_rubric_for_grading: false                 # optional — true makes the rubric score set the grade rather than being feedback-only
+    peer_reviews: false                           # optional — true enables peer review for this assignment
+    automatic_peer_reviews: false                 # optional — true has Canvas auto-assign reviewers instead of manual assignment
+    anonymous_peer_reviews: false                 # optional — true hides reviewer identity from the student being reviewed
+    peer_review_count: 2                          # optional — how many reviews each student must complete (only relevant with automatic_peer_reviews)
+    peer_reviews_assign_at: "2026-09-02T00:00:00-05:00"  # optional — when Canvas should auto-assign peer reviewers (only relevant with automatic_peer_reviews)
+    peer_review_submission_required: false         # optional — true requires a submission before a student can be assigned peer reviews
+    peer_review_across_sections: true              # optional — false restricts peer review pairing to within the same section
+    # -- Anonymous/moderated grading (advanced, rarely needed together) --
+    anonymous_grading: false                       # optional — true hides student identity from graders; requires the course's "Anonymous Instructor Annotations"/anonymous-marking feature to be enabled, silently ignored otherwise
+    anonymous_instructor_annotations: false        # optional — true hides instructor identity in document annotation comments
+    moderated_grading: false                       # optional — true enables multiple provisional graders with a final grade selection step
+    grader_count: 2                                # optional — number of provisional graders allowed (only meaningful with moderated_grading)
+    final_grader_id: null                          # optional — user ID responsible for picking the final grade (only meaningful with moderated_grading)
+    graders_anonymous_to_graders: false             # optional — true hides provisional graders' identities from each other
+    grader_comments_visible_to_graders: true        # optional — false hides one provisional grader's comments from the others
+    grader_names_visible_to_final_grader: true      # optional — false hides provisional grader identities from the final grader
+    only_visible_to_overrides: false                # optional — true makes this assignment visible only to students covered by an assignment_overrides entry (not settable through this tool — see the unwired list below)
+    suppress_assignment: false                      # optional — true hides it from the student-facing gradebook/grade summary entirely; only takes effect if the account has this feature enabled
+    # -- Classic Turnitin/VeriCite (a DIFFERENT mechanism from the newer LTI
+    #    Plagiarism Platform — see the "not supported" note further down) --
+    turnitin_enabled: false                         # optional — only takes effect if the course/account has classic Turnitin provisioned; silently dropped otherwise
+    vericite_enabled: false                         # optional — same, for VeriCite
+    turnitin_settings:                               # optional — only meaningful alongside turnitin_enabled: true
+      originality_report_visibility: immediate       # immediate, after_grading, after_due_date, never
+      s_paper_check: true
+      internet_check: true
+      journal_check: true
+      exclude_biblio: true
+      exclude_quoted: true
+      exclude_small_matches_type: percent             # words, percent, or omit for no exclusion
+      exclude_small_matches_value: 5
+
+  # Checkpointed discussion (two due dates: initial post + required replies).
+  # This is UPDATE-ONLY — the checkpoint itself must already exist (set up
+  # once via the Canvas UI, or carried over by `canvas copy`). If the named
+  # assignment doesn't exist yet, `checkpoints` here raises an error instead
+  # of silently trying to create one.
+  - name: "Discussion: Introduction"              # REQUIRED — must already exist as a checkpointed discussion
+    checkpoints:                                  # optional block; if given, needs at least one of the two tags below
+      - tag: reply_to_topic                       # REQUIRED (per checkpoint) — the initial post; must be reply_to_topic or reply_to_entry
+        points_possible: 14                       # optional — falls back to the checkpoint's current live value if omitted
+        due_at: "2026-08-22T04:59:59Z"            # optional — same fallback; REQUIRED in effect if the checkpoint has no due date yet
+      - tag: reply_to_entry                       # REQUIRED (per checkpoint) — the required replies
+        points_possible: 6                        # optional, see above
+        due_at: "2026-08-24T04:59:59Z"            # optional, see above
+        replies_required: 3                       # optional (reply_to_entry only) — falls back to the current live value if omitted
+
+  # Group assignment — one submission/grade per group instead of per student.
+  - name: "Group Project: Case Study"             # REQUIRED
+    group_category: "Project Groups"              # optional — matched by name against the course's group sets (Canvas calls these "group categories"); REQUIRED to exist already if given
+    grade_group_students_individually: false      # optional — false (default) gives every group member the same grade; true allows per-student grade overrides
+    intra_group_peer_reviews: false                # optional — true allows group members to peer-review each other
+
+# NOT settable through `assignments apply` — documented by Canvas but out of
+# scope here, either because they're gated behind an account/course feature
+# this tool can't detect in advance, or need a whole extra subsystem to be
+# genuinely useful:
+#   assignment_overrides[]        differentiated due dates per section/student (a whole nested-object subsystem of its own)
+#   external_tool_tag_attributes  config for an "external_tool" submission type LTI launch
+#   annotatable_attachment_id     the document ID for "student_annotation" submissions
+#   ab_guid                       outcomes-alignment GUID, institution-specific
+#   asset_processors[]            LTI 1.3 Deep Linking document-processing tools
+#   peer_review (nested)          per-peer-review points/dates; requires the peer_review_allocation_and_grading account feature
+#   estimated_duration_attributes course pacing time estimate; only exists on Canvas "Horizon" courses
+#
+# NOT supported at all: plagiarism review (e.g. Copyleaks or any other
+# LTI-based similarity tool selection). Verified directly against a live
+# assignment — this is DIFFERENT from the classic turnitin_enabled/
+# vericite_enabled fields above (which ARE real and DO work, just only if
+# your account has classic Turnitin/VeriCite provisioned — this course's
+# account doesn't, it uses the newer LTI Plagiarism Platform instead). The
+# LTI tool selection itself isn't in the Assignments API response, isn't
+# in any form field, and doesn't appear even after saving it through the
+# Canvas UI and inspecting the resulting network traffic — it's stored
+# outside the Assignment model entirely and may only be reachable via the
+# LTI tool's own credentials, not a personal API token. Set this one by
+# hand in the Canvas UI.
+
+pages:
+  - title: "Week 1 Overview"                      # REQUIRED — used to match an existing page, or as the title on create
+    body: |                                       # optional — raw HTML, auto-cleaned of chat-paste cruft
+      <p><strong>This week's focus:</strong> getting oriented.</p>
+      <ul>
+        <li>Read the syllabus</li>
+        <li>Introduce yourself in the discussion</li>
+      </ul>
+    published: true                               # optional — defaults true on create
+    front_page: false                             # optional — true makes this the course's front page (only one page can be true)
+    editing_roles: "teachers"                     # optional — teachers, students, members, public (comma-separate to combine, e.g. "teachers,students")
+    notify_of_update: false                       # optional — true sends students a notification about this edit
+    todo_date: "2026-08-18T23:59:00-05:00"        # optional — shows this page on students' to-do list at this time.
+                                                    # NOTE: this is the one field on this whole page that does NOT
+                                                    # follow the blank-means-omitted rule in reverse — Canvas's actual
+                                                    # write param is `student_todo_at`, not `todo_date` (confirmed
+                                                    # against source: sending `todo_date` directly is silently
+                                                    # ignored). This tool translates it for you, but there's currently
+                                                    # no way to *clear* an existing to-do date through this tool, only
+                                                    # set one — clearing needs an explicit "unchecked" signal that
+                                                    # blank-equals-omitted can't express without breaking that rule
+                                                    # for every other field. Clear it by hand in the Canvas UI.
+
+# NOT settable through `pages apply` — documented by Canvas, out of scope:
+#   block_editor_attributes        only exists on courses with Canvas's Block Content Editor feature enabled
+#   estimated_duration_attributes  course pacing time estimate; only exists on Canvas "Horizon" courses
+#   assignment (nested)            differentiated "Assign To" visibility for a page; a newer feature layered on top of everything above
+
+announcements:
+  - title: "Welcome to the course!"               # REQUIRED — used to match an existing announcement, or as the title on create
+    message: "<p>Check the syllabus and Week 1 module to get started.</p>"  # optional (but you'll always want one) — raw HTML, auto-cleaned
+    published: true                                # optional — defaults true on create
+    delayed_post_at: "2026-08-17T08:00:00-05:00"   # optional — ISO8601 to schedule for later; omit to post immediately
+    lock_at: "2026-09-01T00:00:00-05:00"           # optional — when to close replies; omit for never
+    require_initial_post: false                    # optional — true hides existing replies until the student posts their own
+    pinned: false                                   # optional — true pins it to the top of the announcements list
+    todo_date: "2026-08-18T23:59:00-05:00"         # optional — shows on students' to-do list (unlike pages, this one really is the write param name too — no translation needed here)
+    position_after: null                            # optional — the ID of another announcement to sort this one directly after; omit for default chronological order
+    discussion_type: threaded                       # optional — side_comment, not_threaded, or threaded (fully nested replies)
+    sort_order: desc                                 # optional — asc or desc
+    sort_order_locked: false                         # optional — true prevents students from changing their own sort order preference
+    expanded: true                                   # optional — true expands all threads by default
+    expanded_locked: false                            # optional — true prevents students from collapsing threads
+    allow_rating: false                               # optional — true lets users upvote replies
+    only_graders_can_rate: false                      # optional — true restricts rating to graders (only meaningful with allow_rating)
+    sort_by_rating: false                              # optional — true sorts replies by rating instead of chronologically
+    podcast_enabled: false                             # optional — true gives this announcement's replies an RSS podcast feed
+    podcast_has_student_posts: false                   # optional — true includes student replies in that feed (only meaningful with podcast_enabled)
+    specific_sections: "1234,5678"                      # optional — comma-separated course section IDs to restrict visibility to; omit for the whole course. Not name-resolved by this tool — look section IDs up in the Canvas UI
+
+# NOT settable through `announcements apply` — documented by Canvas, out of
+# scope, mostly because they're inapplicable to a normal instructor
+# announcement rather than gated behind a feature:
+#   assignment (nested)      turns the topic into a graded discussion — that's what `assignments apply`'s checkpoints/regular discussion handling is for, not an announcement
+#   group_category_id        makes it a group discussion (each group gets its own copy) — essentially never wanted for an announcement
+#   attachment                a file upload; this tool is JSON-based, out of scope
+#   anonymous_state / is_anonymous_author   student-side anonymous posting settings; not applicable to an instructor announcement
+
+# *** DESTRUCTIVE — read this before touching this section for real. ***
+# `modules apply` syncs the course's modules to exactly match this list:
+#   - A module in the file but not in the course: CREATED.
+#   - A module in the file AND in the course: matched by name, kept, its
+#     items synced (see below).
+#   - A module in the course but NOT in this file: DELETED, entirely.
+# Within each kept/created module, items are synced the same way by title:
+# listed-but-missing items are added, present-and-listed items are left
+# alone, and present-but-NOT-listed items are removed from the module.
+# Removing an item only unlinks it from the module — the underlying page,
+# assignment, etc. is never touched or deleted by this. Deleting a whole
+# module doesn't delete its former items' content either, just the module
+# and its links. Always `--dry-run` an edited copy of a real course's
+# module file before applying — the two-module list below, applied for
+# real against a course with other modules, would delete every one of
+# them.
+modules:
+  - name: "Week 1"                                 # REQUIRED — used to match an existing module, or as the name on create
+    published: true                                # optional — defaults true on create. Canvas's create endpoint actually
+                                                      # ignores this field entirely (confirmed against source and by
+                                                      # accidentally shipping this bug once) — this tool works around it
+                                                      # with an automatic follow-up update, so it behaves as documented,
+                                                      # but it's worth knowing there are two requests happening under the hood
+    position: 2                                     # optional — display order among the course's modules
+    unlock_at: "2026-08-17T05:00:00Z"              # optional — ISO8601; omit for no unlock date (module opens as soon as published)
+    require_sequential_progress: false              # optional — true forces students to complete items in this module in order
+    publish_final_grade: false                      # optional — true triggers a final grade recalculation/post whenever a student completes a graded item in this module
+    # prerequisites: []                             # optional — list of OTHER MODULE NAMES in this file (or already in the course);
+                                                      # forward references to modules defined later in this file are fine
+    items:                                           # optional — list of module items, see field rules per type below
+      - type: SubHeader                              # REQUIRED (per item) — a plain divider label, no other fields besides title/indent/position
+        title: "Getting Started"                     # REQUIRED (per item)
+
+      - type: Page                                   # links an EXISTING page, matched by title
+        title: "Week 1 Overview"                     # REQUIRED
+        indent: 1                                    # optional — 0 (default) = top-level, 1+ = visually nested under the item above
+        position: 2                                  # optional — order within the module
+        # page_url: "week-1-overview"                 # optional — falls back to matching an existing page by title if omitted
+        completion_requirement:                       # optional — makes this item count toward the module's completion requirements
+          type: must_view                             # REQUIRED (if completion_requirement given) — must_view, must_contribute, must_submit, must_mark_done, min_score, min_percentage
+          # min_score: 70                              # REQUIRED only for type min_score/min_percentage — the minimum score/percentage needed
+
+      - type: Assignment                             # links an EXISTING assignment, matched by title
+        title: "Homework 1: Intro"                   # REQUIRED
+        indent: 1                                    # optional
+
+      - type: Discussion                              # links an EXISTING discussion, matched by title
+        title: "Discussion: Introduction"             # REQUIRED
+        indent: 1                                     # optional
+        published: true                               # optional — item-level publish state, independent of the module's own published state; same "ignored on create, applied via automatic follow-up update" situation as the module-level field above
+
+      - type: Quiz                                    # links an EXISTING quiz, matched by title
+        title: "Syllabus Quiz"                        # REQUIRED
+        indent: 1                                     # optional
+
+      - type: File                                    # links an EXISTING course file
+        title: "Syllabus.pdf"                         # REQUIRED
+        indent: 1                                     # optional
+        # content_id: 6238159                          # optional — falls back to matching an existing file by display name if omitted
+
+      - type: ExternalUrl                              # a plain link, not tied to any Canvas content
+        title: "Course Intro Video"                    # REQUIRED
+        url: "https://example.com/intro-video"         # REQUIRED
+        indent: 1                                      # optional
+
+      - type: ExternalTool                              # an LTI tool launch (e.g. a publisher eTextbook)
+        title: "eTextbook: Chapter 1"                   # REQUIRED
+        url: "https://gateway.cengage.com/rest/launchBasicLTI/..."  # REQUIRED — the LTI launch URL
+        new_tab: true                                   # optional — defaults true; false opens the tool inline
+        iframe_width: 1200                              # optional — inline launch frame width in pixels (only meaningful with new_tab: false)
+        iframe_height: 800                              # optional — inline launch frame height in pixels (only meaningful with new_tab: false)
+        indent: 1                                       # optional
+
+  - name: "Week 2"                                     # REQUIRED
+    published: true                                     # optional
+    unlock_at: "2026-08-24T05:00:00Z"                   # optional
+    prerequisites: ["Week 1"]                            # optional — must complete Week 1 before Week 2 unlocks
+    items:
+      - type: Assignment
+        title: "Homework 2: Loops"                       # REQUIRED
+
+# NOT settable through `modules apply` — module items support one Canvas
+# field this tool doesn't expose:
+#   module_item[module_id]   moves an existing item to a different module (a "move," not a create) — out of scope since this tool only ever adds new items, never repositions existing ones across modules

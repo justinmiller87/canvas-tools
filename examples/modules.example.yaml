@@ -1,0 +1,34 @@
+# Example input for: canvas modules apply --course <ID> --file this.yaml
+#
+# Modules are matched/created by name. Items are matched by title within
+# the module (skipped if already present) and linked by type:
+#   - ExternalUrl: requires `url`
+#   - SubHeader:   just a label, no link
+#   - Page:        links an existing wiki page; give `page_url` (the page's
+#                  slug) or omit it to match an existing page by title
+#   - Assignment:  title must match an existing assignment's name exactly
+#   - Quiz:        title must match an existing quiz's title exactly
+#   - Discussion:  title must match an existing discussion topic's title exactly
+modules:
+  - name: "Week 1"
+    published: true
+    unlock_at: "2026-08-17T05:00:00Z"
+    items:
+      - type: SubHeader
+        title: "Getting Started"
+      - type: Page
+        title: "Syllabus"
+        page_url: "syllabus"
+      - type: Assignment
+        title: "Homework 1: Intro"
+      - type: ExternalUrl
+        title: "Course Intro Video"
+        url: "https://example.com/intro-video"
+
+  - name: "Week 2"
+    published: true
+    unlock_at: "2026-08-24T05:00:00Z"
+    prerequisites: ["Week 1"]  # must complete Week 1 before this unlocks
+    items:
+      - type: Assignment
+        title: "Homework 2: Loops"

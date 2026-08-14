@@ -1,0 +1,18 @@
+# Example input for: canvas pages apply --course <ID> --file this.yaml
+#
+# Matched to decide create-vs-update by exact page title (case-insensitive).
+# `body` is raw HTML.
+pages:
+  - title: "Week 1 Overview"
+    body: |
+      <p><strong>This week's focus:</strong> getting oriented.</p>
+      <ul>
+        <li>Read the syllabus</li>
+        <li>Introduce yourself in the discussion</li>
+      </ul>
+    published: true
+
+  - title: "Syllabus"
+    body: "<p>Course policies go here.</p>"
+    published: true
+    front_page: true
