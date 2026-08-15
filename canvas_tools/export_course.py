@@ -8,7 +8,7 @@ import os
 
 import yaml
 
-from canvas_tools.client import CanvasClient
+from canvas_tools.client import CanvasClient, CanvasError
 from canvas_tools.html_clean import clean_html
 from canvas_tools.progress import Progress
 from canvas_tools.rubrics import export_rubrics_csv
@@ -197,53 +197,41 @@ def _course_folder_name(course_id, course_code):
     return f"course_{course_id}_{safe_code}" if safe_code else f"course_{course_id}"
 
 
-def main():
-    p = argparse.ArgumentParser(description="Export a Canvas course to assignments.yaml + modules.yaml")
-    p.add_argument("--course", required=True, help="Canvas course ID to export")
-    p.add_argument(
-        "--out",
-        default="exports",
-        help="Parent directory (default: exports) — the course's own subfolder, named "
-        "course_<id>_<course code>, is created underneath it",
-    )
-    p.add_argument("--verbose", action="store_true", help="Print each item as it's fetched instead of a progress bar")
-    args = p.parse_args()
+def export_one_course(c, course_id, out_parent, verbose=False):
+    course_code = c.get(f"courses/{course_id}").get("course_code")
+    out = os.path.join(out_parent, _course_folder_name(course_id, course_code))
+    os.makedirs(out, exist_ok=True)
+    print(f"exporting course {course_id} to {out}/")
 
-    c = CanvasClient()
-    course_code = c.get(f"courses/{args.course}").get("course_code")
-    args.out = os.path.join(args.out, _course_folder_name(args.course, course_code))
-    os.makedirs(args.out, exist_ok=True)
-    print(f"exporting to {args.out}/")
-
-    rubric_files = export_rubrics_csv(c, args.course, verbose=args.verbose)
-    rubrics_dir = os.path.join(args.out, "rubrics")
+    rubric_files = export_rubrics_csv(c, course_id, verbose=verbose)
+    rubrics_dir = os.path.join(out, "rubrics")
     os.makedirs(rubrics_dir, exist_ok=True)
     for filename, csv_text in rubric_files:
         with open(os.path.join(rubrics_dir, filename), "w", newline="") as f:
             f.write(csv_text)
     print(f"wrote {len(rubric_files)} rubrics -> {rubrics_dir}/")
 
-    assignments = export_assignments(c, args.course)
-    with open(os.path.join(args.out, "assignments.yaml"), "w") as f:
-        f.write(f"# Exported from course {args.course} — schema matches `canvas assignments apply`\n")
+    assignments = export_assignments(c, course_id)
+    with open(os.path.join(out, "assignments.yaml"), "w") as f:
+        f.write(f"# Exported from course {course_id} — schema matches `canvas assignments apply`\n")
         yaml.dump(assignments, f, sort_keys=False, allow_unicode=True, width=100)
-    print(f"wrote {len(assignments['assignments'])} assignments -> {args.out}/assignments.yaml")
+    print(f"wrote {len(assignments['assignments'])} assignments -> {out}/assignments.yaml")
 
-    pages = export_pages(c, args.course, verbose=args.verbose)
-    with open(os.path.join(args.out, "pages.yaml"), "w") as f:
-        f.write(f"# Exported from course {args.course} — schema matches `canvas pages apply`\n")
+    pages = export_pages(c, course_id, verbose=verbose)
+    with open(os.path.join(out, "pages.yaml"), "w") as f:
+        f.write(f"# Exported from course {course_id} — schema matches `canvas pages apply`\n")
         yaml.dump(pages, f, sort_keys=False, allow_unicode=True, width=100)
-    print(f"wrote {len(pages['pages'])} pages -> {args.out}/pages.yaml")
+    print(f"wrote {len(pages['pages'])} pages -> {out}/pages.yaml")
 
-    announcements = export_announcements(c, args.course)
-    with open(os.path.join(args.out, "announcements.yaml"), "w") as f:
-        f.write(f"# Exported from course {args.course} — schema matches `canvas announcements apply`\n")
+    announcements = export_announcements(c, course_id)
+    with open(os.path.join(out, "announcements.yaml"), "w") as f:
+        f.write(f"# Exported from course {course_id} — schema matches `canvas announcements apply`\n")
         yaml.dump(announcements, f, sort_keys=False, allow_unicode=True, width=100)
-    print(f"wrote {len(announcements['announcements'])} announcements -> {args.out}/announcements.yaml")
+    print(f"wrote {len(announcements['announcements'])} announcements -> {out}/announcements.yaml")
 
-    modules = export_modules(c, args.course)
-    with open(os.path.join(args.out, "modules.yaml"), "w") as f:
-        f.write(f"# Exported from course {args.course} — schema matches `canvas modules apply`\n")
+    modules = export_modules(c, course_id)
+    with open(os.path.join(out, "modules.yaml"), "w") as f:
+        f.write(f"# Exported from course {course_id} — schema matches `canvas modules apply`\n")
         f.write(
             "# `modules apply` treats this file as the exact, complete set of modules and\n"
             "# items — a module or item missing from this file gets DELETED from the course,\n"
@@ -251,7 +239,51 @@ def main():
         )
         yaml.dump(modules, f, sort_keys=False, allow_unicode=True, width=100)
     total_items = sum(len(m["items"]) for m in modules["modules"])
-    print(f"wrote {len(modules['modules'])} modules / {total_items} items -> {args.out}/modules.yaml")
+    print(f"wrote {len(modules['modules'])} modules / {total_items} items -> {out}/modules.yaml")
+
+
+def main():
+    p = argparse.ArgumentParser(description="Export one or more Canvas courses to assignments.yaml + modules.yaml")
+    course_group = p.add_mutually_exclusive_group(required=True)
+    course_group.add_argument("--course", nargs="+", help="One or more Canvas course IDs to export")
+    course_group.add_argument(
+        "--all", action="store_true", help="Export every course you teach (an initial full sync)"
+    )
+    p.add_argument(
+        "--out",
+        default="exports",
+        help="Parent directory (default: exports) — each course's own subfolder, named "
+        "course_<id>_<course code>, is created underneath it",
+    )
+    p.add_argument("--verbose", action="store_true", help="Print each item as it's fetched instead of a progress bar")
+    args = p.parse_args()
+
+    c = CanvasClient()
+
+    if args.all:
+        courses = c.get("courses", params={"per_page": 100, "enrollment_type": "teacher", "state[]": "available"})
+        course_ids = [str(co["id"]) for co in courses]
+        if not course_ids:
+            print("No courses found.")
+            return
+    else:
+        course_ids = args.course
+
+    failed = []
+    for i, course_id in enumerate(course_ids):
+        if len(course_ids) > 1:
+            print(f"\n=== [{i + 1}/{len(course_ids)}] course {course_id} ===")
+        try:
+            export_one_course(c, course_id, args.out, verbose=args.verbose)
+        except CanvasError as e:
+            print(f"course {course_id}: ERROR — {e}")
+            failed.append(course_id)
+
+    if len(course_ids) > 1:
+        ok = len(course_ids) - len(failed)
+        print(f"\ndone: {ok}/{len(course_ids)} courses exported")
+        if failed:
+            print(f"failed: {', '.join(failed)}")
 
 
 if __name__ == "__main__":

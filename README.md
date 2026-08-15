@@ -66,9 +66,20 @@ update`, or to import fresh into a _different_ course.
 
 ```
 python3 -m canvas_tools.export_course --course 10001 --out exports
+python3 -m canvas_tools.export_course --course 10001 10002 10003 --out exports
+python3 -m canvas_tools.export_course --all --out exports
 ```
 
-`--out` is the _parent_ directory (default: `exports`) — the course's own
+`--course` takes one or more course IDs — each gets exported in turn, its
+own subfolder, in a single run. `--all` exports every course you teach
+(anything Canvas returns as `state: available` for your teacher
+enrollments) instead of listing IDs by hand — useful for an initial sync
+onto a new machine. `--course` and `--all` are mutually exclusive. In a
+multi-course run, one course failing (e.g. a bad ID) prints an error and
+continues on to the rest rather than aborting the whole run; a summary of
+how many succeeded prints at the end.
+
+`--out` is the _parent_ directory (default: `exports`) — each course's own
 subfolder is created underneath it automatically, named
 `course_<id>_<course code>` (e.g. `course_10001_26-FA_XXX-100-OL01`), not
 just the bare id. A course code alone isn't memorable months later across
