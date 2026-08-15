@@ -14,6 +14,14 @@ from canvas_tools.html_clean import clean_html
 from canvas_tools.progress import Progress
 from canvas_tools.rubrics import export_rubrics_csv
 
+# Derived from this file's own location, not the current working directory —
+# so the default --out always lands in this project's real exports/ folder,
+# even when run from inside a course's own exports subfolder (where a bare
+# relative "exports" would instead create a stray nested exports/exports/...
+# right there). An explicit --out is unaffected by this and still resolves
+# relative to wherever you actually are, same as --file always has.
+_DEFAULT_OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "exports")
+
 ASSIGNMENT_FIELDS = [
     "name",
     "description",
@@ -309,9 +317,11 @@ def main():
     )
     p.add_argument(
         "--out",
-        default="exports",
-        help="Parent directory (default: exports) — each course's own subfolder, named "
-        "course_<id>_<course code>, is created underneath it",
+        default=_DEFAULT_OUT,
+        help="Parent directory (default: this project's own exports/ folder, regardless of your "
+        "current directory) — each course's own subfolder, named course_<id>_<course code>, is "
+        "created underneath it. An explicit --out is resolved relative to wherever you actually "
+        "are, same as --file.",
     )
     p.add_argument("--verbose", action="store_true", help="Print each item as it's fetched instead of a progress bar")
     p.add_argument(

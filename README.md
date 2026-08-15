@@ -121,14 +121,21 @@ codes/names contain, not tied to any particular format — some schools'
 codes look like `26/FA XXX-100-OL01`, in which case `--match "26/FA"`
 grabs just that term, but the match itself doesn't assume that shape.
 
-`--out` is the _parent_ directory (default: `exports`) — each course's own
-subfolder is created underneath it automatically, named
-`course_<id>_<course code>` (e.g. `course_10001_26-FA_XXX-100-OL01`), not
-just the bare id. A course code alone isn't memorable months later across
-a dozen sections; the sanitized code (Canvas course codes look like
-`26/FA XXX-100-OL01` — `/` isn't valid in a directory name, so `/` becomes
-`-` and spaces become `_`) makes it obvious which folder is which course
-without having to look it up.
+`--out` is the _parent_ directory — each course's own subfolder is created
+underneath it automatically, named `course_<id>_<course code>` (e.g.
+`course_10001_26-FA_XXX-100-OL01`), not just the bare id. A course code
+alone isn't memorable months later across a dozen sections; the sanitized
+code (Canvas course codes look like `26/FA XXX-100-OL01` — `/` isn't valid
+in a directory name, so `/` becomes `-` and spaces become `_`) makes it
+obvious which folder is which course without having to look it up.
+
+Left out, `--out` defaults to _this project's own_ `exports/` folder —
+resolved from where the code itself lives on disk, not your current
+directory, so running this from inside a course's own exports subfolder
+still lands in the right place instead of creating a stray nested
+`exports/exports/...` right there (confirmed the hard way). Give `--out`
+explicitly and it resolves normally, relative to wherever you actually
+are, same as `--file` always has.
 
 `--format json` writes `.json` files instead of `.yaml` (rubrics stay CSV
 either way — that format is dictated by Canvas's own rubric import
