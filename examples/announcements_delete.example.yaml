@@ -1,0 +1,10 @@
+# Example input for: canvas announcements delete --course <ID> --file this.yaml
+#
+# Each title is re-checked against Canvas itself (not a local export) before
+# anything happens — a typo or an already-deleted announcement fails loudly
+# instead of silently doing nothing. Always run with --dry-run first; the
+# real run still prints the full plan and requires typing "yes" before
+# deleting anything.
+announcements:
+  - "Old Reminder"
+  - "Outdated Notice"

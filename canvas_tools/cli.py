@@ -324,6 +324,189 @@ def cmd_assignment_groups_apply(args, c):
     progress.done()
 
 
+def _confirm_wipe_everything(args, kind, total_count):
+    """Extra escalation gate for the case where a delete file's matches cover
+    every single item of this type currently in the course — an easy mistake
+    to make (e.g. running `delete` against a full export instead of a
+    curated subset) with an outsized blast radius. A plain 'yes' isn't
+    enough here — the course id has to be typed out, so it can't be
+    muscle-memory'd through the same way."""
+    print(f"\n*** This deletes ALL {total_count} {kind}s currently in course {args.course} — none would remain. ***")
+    token = str(args.course)
+    reply = input(f"Type the course ID ({token}) to confirm: ").strip()
+    if reply != token:
+        print("Aborted — nothing deleted.")
+        return False
+    return True
+
+
+def _delete_flow(args, c, kind, key_field, id_field, list_path, find_fn, list_params=None):
+    """Shared confirm-then-delete flow for pages/assignments/announcements
+    `delete` commands: load names from --file, resolve each against a
+    freshly fetched list from Canvas — never a local export — so a typo'd
+    or already-gone name fails loudly before anything happens, in
+    --dry-run and for real alike. Prints the plan and requires typing
+    'yes' once before deleting anything for real, plus the course-id
+    escalation above if the file covers every item that currently exists.
+    Unlike assignment_groups delete, none of these carry another resource
+    down with them, so there's no second confirmation for that.
+
+    Returns the list of matches to delete, or None if the caller should
+    stop (empty file, --dry-run, or the user didn't confirm).
+    """
+    with open(args.file) as f:
+        spec = yaml.safe_load(f)
+
+    entries = spec.get(f"{kind}s", spec if isinstance(spec, list) else [])
+    if not entries:
+        print(f"No {kind}s found in file.")
+        return None
+
+    existing = c.get(list_path, params={**{"per_page": 100}, **(list_params or {})})
+
+    matches = []
+    for entry in entries:
+        name = entry[key_field] if isinstance(entry, dict) else entry
+        match = find_fn(existing, name)
+        if match is None:
+            raise CanvasError(f"{kind} {name!r} not found in course {args.course} (already deleted, or a typo?)")
+        matches.append(match)
+
+    wipes_everything = bool(existing) and len(matches) == len(existing)
+
+    if args.dry_run:
+        for m in matches:
+            print(f"[dry-run] would DELETE {kind} ({id_field}={m[id_field]}): {m[key_field]}")
+        if wipes_everything:
+            print(f"[dry-run] NOTE: this is ALL {len(existing)} {kind}s in course {args.course} — none would remain.")
+        return None
+
+    print(f"About to permanently delete {len(matches)} {kind}(s) from course {args.course}:")
+    if wipes_everything:
+        print(f"  *** every {kind} currently in the course — none would remain ***")
+    for m in matches:
+        print(f"  - {m[key_field]} ({id_field}={m[id_field]})")
+    reply = input("Type 'yes' to confirm: ").strip().lower()
+    if reply != "yes":
+        print("Aborted — nothing deleted.")
+        return None
+
+    if wipes_everything and not _confirm_wipe_everything(args, kind, len(existing)):
+        return None
+
+    return matches
+
+
+def cmd_assignment_groups_delete(args, c):
+    with open(args.file) as f:
+        spec = yaml.safe_load(f)
+
+    items = spec.get("assignment_groups", spec if isinstance(spec, list) else [])
+    if not items:
+        print("No assignment groups found in file.")
+        return
+
+    # Always pulled fresh from Canvas, never from a local export — a stale
+    # export could point at a group that's already gone, or miss assignments
+    # added to it since the export was taken.
+    existing_groups = c.get(f"courses/{args.course}/assignment_groups", params={"per_page": 100})
+    existing_assignments = c.get(f"courses/{args.course}/assignments", params={"per_page": 100})
+
+    # Resolve every group (and move target) up front, so a typo'd name or an
+    # ambiguous/missing choice for a non-empty group fails loudly before
+    # anything is touched — in --dry-run and for real alike.
+    plan = []
+    for entry in items:
+        name = entry["name"] if isinstance(entry, dict) else entry
+        group = _find_assignment_group_by_name(existing_groups, name)
+        if group is None:
+            raise CanvasError(f"assignment group {name!r} not found in course {args.course} (already deleted, or a typo?)")
+
+        move_to_name = entry.get("move_assignments_to") if isinstance(entry, dict) else None
+        delete_assignments = bool(entry.get("delete_assignments")) if isinstance(entry, dict) else False
+        if move_to_name and delete_assignments:
+            raise CanvasError(f"assignment group {name!r}: specify move_assignments_to OR delete_assignments, not both")
+
+        group_assignments = [a for a in existing_assignments if a.get("assignment_group_id") == group["id"]]
+
+        target = None
+        if move_to_name:
+            target = _find_assignment_group_by_name(existing_groups, move_to_name)
+            if target is None:
+                raise CanvasError(f"move_assignments_to group {move_to_name!r} not found in course {args.course}")
+            if target["id"] == group["id"]:
+                raise CanvasError(f"assignment group {name!r}: move_assignments_to can't be the same group")
+        elif group_assignments and not delete_assignments:
+            names = ", ".join(a["name"] for a in group_assignments)
+            raise CanvasError(
+                f"assignment group {name!r} still has {len(group_assignments)} assignment(s) in it "
+                f"({names}) — add `move_assignments_to: <other group name>` to relocate them first, "
+                f"or `delete_assignments: true` to delete them along with the group"
+            )
+
+        plan.append({"group": group, "assignments": group_assignments, "target": target, "delete_assignments": delete_assignments})
+
+    wipes_everything = bool(existing_groups) and len(plan) == len(existing_groups)
+
+    if args.dry_run:
+        for p in plan:
+            if p["target"]:
+                print(f"[dry-run] would MOVE {len(p['assignments'])} assignment(s) from {p['group']['name']!r} -> {p['target']['name']!r}")
+            elif p["assignments"]:
+                names = ", ".join(a["name"] for a in p["assignments"])
+                print(f"[dry-run] would DELETE {len(p['assignments'])} assignment(s) along with the group: {names}")
+            print(f"[dry-run] would DELETE assignment group (id={p['group']['id']}): {p['group']['name']}")
+        if wipes_everything:
+            print(f"[dry-run] NOTE: this is ALL {len(existing_groups)} assignment groups in course {args.course} — none would remain.")
+        return
+
+    print(f"About to permanently delete {len(plan)} assignment group(s) from course {args.course}:")
+    if wipes_everything:
+        print(f"  *** every assignment group currently in the course — none would remain ***")
+    for p in plan:
+        if p["target"]:
+            print(f"  - {p['group']['name']} (id={p['group']['id']}) — moving {len(p['assignments'])} assignment(s) to {p['target']['name']!r} first")
+        elif p["assignments"]:
+            print(f"  - {p['group']['name']} (id={p['group']['id']}) — WILL ALSO DELETE {len(p['assignments'])} assignment(s) in it")
+        else:
+            print(f"  - {p['group']['name']} (id={p['group']['id']}) — empty")
+    reply = input("Type 'yes' to confirm: ").strip().lower()
+    if reply != "yes":
+        print("Aborted — nothing deleted.")
+        return
+
+    if wipes_everything and not _confirm_wipe_everything(args, "assignment group", len(existing_groups)):
+        return
+
+    # Actually deleting assignments (not just moving or removing an empty
+    # group) is irreversible in a different, bigger way than a group
+    # deletion — it gets its own explicit second confirmation naming every
+    # assignment about to be lost, so a rushed 'yes' above can't nuke
+    # assignments as a side effect without a clear second chance to stop.
+    losing_assignments = [p for p in plan if p["delete_assignments"] and p["assignments"]]
+    if losing_assignments:
+        total = sum(len(p["assignments"]) for p in losing_assignments)
+        print(f"\nThis will PERMANENTLY DELETE {total} assignment(s), not just the group(s) they're in:")
+        for p in losing_assignments:
+            for a in p["assignments"]:
+                print(f"  - {a['name']} (id={a['id']}) [group: {p['group']['name']}]")
+        reply2 = input("Type 'yes' again to confirm permanent assignment deletion: ").strip().lower()
+        if reply2 != "yes":
+            print("Aborted — nothing deleted.")
+            return
+
+    progress = Progress(len(plan), "assignment groups (deleting)", verbose=args.verbose)
+    for p in plan:
+        progress.step(p["group"]["name"])
+        if p["target"]:
+            c.delete(f"courses/{args.course}/assignment_groups/{p['group']['id']}?move_assignments_to={p['target']['id']}")
+        else:
+            c.delete(f"courses/{args.course}/assignment_groups/{p['group']['id']}")
+        if args.verbose:
+            print(f"deleted: {p['group']['name']} (id={p['group']['id']})")
+    progress.done()
+
+
 def cmd_assignments_apply(args, c):
     with open(args.file) as f:
         spec = yaml.safe_load(f)
@@ -416,6 +599,19 @@ def cmd_assignments_apply(args, c):
     progress.done()
 
 
+def cmd_assignments_delete(args, c):
+    matches = _delete_flow(args, c, "assignment", "name", "id", f"courses/{args.course}/assignments", _find_assignment_by_name)
+    if not matches:
+        return
+    progress = Progress(len(matches), "assignments (deleting)", verbose=args.verbose)
+    for m in matches:
+        progress.step(m["name"])
+        c.delete(f"courses/{args.course}/assignments/{m['id']}")
+        if args.verbose:
+            print(f"deleted: {m['name']} (id={m['id']})")
+    progress.done()
+
+
 def _find_page_by_title(pages, title):
     for p in pages:
         if p["title"].strip().lower() == title.strip().lower():
@@ -472,6 +668,19 @@ def cmd_pages_apply(args, c):
             created = c.post(f"courses/{args.course}/pages", json=payload)
             if args.verbose:
                 print(f"created: {title} (url={created['url']})")
+    progress.done()
+
+
+def cmd_pages_delete(args, c):
+    matches = _delete_flow(args, c, "page", "title", "url", f"courses/{args.course}/pages", _find_page_by_title)
+    if not matches:
+        return
+    progress = Progress(len(matches), "pages (deleting)", verbose=args.verbose)
+    for m in matches:
+        progress.step(m["title"])
+        c.delete(f"courses/{args.course}/pages/{m['url']}")
+        if args.verbose:
+            print(f"deleted: {m['title']} (url={m['url']})")
     progress.done()
 
 
@@ -540,6 +749,28 @@ def cmd_announcements_apply(args, c):
             created = c.post(f"courses/{args.course}/discussion_topics", json=body)
             if args.verbose:
                 print(f"created: {title} (id={created['id']})")
+    progress.done()
+
+
+def cmd_announcements_delete(args, c):
+    matches = _delete_flow(
+        args,
+        c,
+        "announcement",
+        "title",
+        "id",
+        f"courses/{args.course}/discussion_topics",
+        _find_announcement_by_title,
+        list_params={"only_announcements": True},
+    )
+    if not matches:
+        return
+    progress = Progress(len(matches), "announcements (deleting)", verbose=args.verbose)
+    for m in matches:
+        progress.step(m["title"])
+        c.delete(f"courses/{args.course}/discussion_topics/{m['id']}")
+        if args.verbose:
+            print(f"deleted: {m['title']} (id={m['id']})")
     progress.done()
 
 
@@ -645,7 +876,26 @@ def cmd_modules_apply(args, c):
     # whole module does not delete its former items' underlying content
     # either. Always run --dry-run first; a stale or incomplete file here
     # will delete real course structure, not just leave it alone.
+    #
+    # Routine partial edits (dropping a module or two while restructuring)
+    # stay frictionless here, same as always — no prompt. But if the file
+    # shares no module names with what's actually in the course at all
+    # (wrong file, wrong course, or a near-empty file applied by mistake),
+    # every existing module would be deleted in one shot; that gets the
+    # same course-id escalation as the dedicated `delete` commands before
+    # anything — including the creates below — happens.
     file_module_names = {mod["name"].strip().lower() for mod in modules}
+    modules_to_delete = [m for m in existing_modules if m["name"].strip().lower() not in file_module_names]
+    wipes_everything = bool(existing_modules) and len(modules_to_delete) == len(existing_modules)
+    if wipes_everything:
+        if args.dry_run:
+            print(
+                f"[dry-run] NOTE: this file shares no module names with course {args.course} — "
+                f"applying it for real would delete ALL {len(existing_modules)} existing modules."
+            )
+        elif not _confirm_wipe_everything(args, "module", len(existing_modules)):
+            return
+
     with Progress(len(existing_modules), "modules (checking for deletions)", verbose=args.verbose) as progress:
         for m in existing_modules:
             progress.step(m["name"])
@@ -881,6 +1131,13 @@ def build_parser():
     p_ag_export.add_argument("--course", required=True, help="Canvas course ID")
     p_ag_export.add_argument("--out", required=True, help="Output YAML path")
     p_ag_export.set_defaults(func=cmd_assignment_groups_export)
+    p_ag_delete = sub_ag.add_parser(
+        "delete", help="Delete assignment groups named in a YAML file (asks for confirmation)", parents=[verbose_parent]
+    )
+    p_ag_delete.add_argument("--course", required=True, help="Canvas course ID")
+    p_ag_delete.add_argument("--file", required=True, help="Path to assignment groups delete YAML file")
+    p_ag_delete.add_argument("--dry-run", action="store_true")
+    p_ag_delete.set_defaults(func=cmd_assignment_groups_delete)
 
     p_assign = sub.add_parser("assignments", help="Assignment operations")
     sub_assign = p_assign.add_subparsers(dest="subcommand", required=True)
@@ -893,6 +1150,13 @@ def build_parser():
     p_assign_export.add_argument("--course", required=True, help="Canvas course ID")
     p_assign_export.add_argument("--out", required=True, help="Output YAML path")
     p_assign_export.set_defaults(func=cmd_assignments_export)
+    p_assign_delete = sub_assign.add_parser(
+        "delete", help="Delete assignments named in a YAML file (asks for confirmation)", parents=[verbose_parent]
+    )
+    p_assign_delete.add_argument("--course", required=True, help="Canvas course ID")
+    p_assign_delete.add_argument("--file", required=True, help="Path to assignments delete YAML file")
+    p_assign_delete.add_argument("--dry-run", action="store_true")
+    p_assign_delete.set_defaults(func=cmd_assignments_delete)
 
     p_pages = sub.add_parser("pages", help="Page operations")
     sub_pages = p_pages.add_subparsers(dest="subcommand", required=True)
@@ -905,6 +1169,13 @@ def build_parser():
     p_pages_export.add_argument("--course", required=True, help="Canvas course ID")
     p_pages_export.add_argument("--out", required=True, help="Output YAML path")
     p_pages_export.set_defaults(func=cmd_pages_export)
+    p_pages_delete = sub_pages.add_parser(
+        "delete", help="Delete pages named in a YAML file (asks for confirmation)", parents=[verbose_parent]
+    )
+    p_pages_delete.add_argument("--course", required=True, help="Canvas course ID")
+    p_pages_delete.add_argument("--file", required=True, help="Path to pages delete YAML file")
+    p_pages_delete.add_argument("--dry-run", action="store_true")
+    p_pages_delete.set_defaults(func=cmd_pages_delete)
 
     p_ann = sub.add_parser("announcements", help="Announcement operations")
     sub_ann = p_ann.add_subparsers(dest="subcommand", required=True)
@@ -917,6 +1188,13 @@ def build_parser():
     p_ann_export.add_argument("--course", required=True, help="Canvas course ID")
     p_ann_export.add_argument("--out", required=True, help="Output YAML path")
     p_ann_export.set_defaults(func=cmd_announcements_export)
+    p_ann_delete = sub_ann.add_parser(
+        "delete", help="Delete announcements named in a YAML file (asks for confirmation)", parents=[verbose_parent]
+    )
+    p_ann_delete.add_argument("--course", required=True, help="Canvas course ID")
+    p_ann_delete.add_argument("--file", required=True, help="Path to announcements delete YAML file")
+    p_ann_delete.add_argument("--dry-run", action="store_true")
+    p_ann_delete.set_defaults(func=cmd_announcements_delete)
 
     p_mod = sub.add_parser("modules", help="Module operations")
     sub_mod = p_mod.add_subparsers(dest="subcommand", required=True)

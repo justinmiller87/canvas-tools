@@ -196,6 +196,55 @@ python3 -m canvas_tools.cli assignment_groups apply --course 10001 --file my_gro
 python3 -m canvas_tools.cli assignment_groups apply --course 10001 --file my_groups.yaml
 ```
 
+### Delete assignment groups
+
+`apply`, above, never deletes anything — leaving a group out of the file
+just leaves it alone in Canvas. To actually remove a group, use `delete`
+with its own file (see `examples/assignment_groups_delete.example.yaml`):
+
+```yaml
+assignment_groups:
+  - name: "Old Homework"
+    move_assignments_to: "Homework"   # relocate its assignments first
+
+  - name: "Empty Leftover Group"      # nothing in it — nothing else needed
+
+  - name: "Scrapped Unit"
+    delete_assignments: true          # delete its assignments too, permanently
+```
+
+```
+python3 -m canvas_tools.cli assignment_groups delete --course 10001 --file my_groups_delete.yaml --dry-run
+python3 -m canvas_tools.cli assignment_groups delete --course 10001 --file my_groups_delete.yaml
+```
+
+Every group named in the file is checked against Canvas itself — freshly
+fetched, not a local export — before anything happens, so a stale file or a
+typo'd name fails loudly instead of silently doing nothing. If a group
+still has assignments in it, the file must say what happens to them:
+`move_assignments_to: <other group name>` relocates them first, or
+`delete_assignments: true` deletes them along with the group. Leaving both
+out for a non-empty group is an error, not a default — Canvas itself
+deletes a group's assignments if you don't tell it to move them elsewhere,
+so this tool refuses to guess.
+
+**Two separate confirmations, not --dry-run gated.** Even without
+`--dry-run`, the real run always prints the full plan and requires typing
+`yes` before touching anything. If any group is set to `delete_assignments:
+true` and actually has assignments in it, there's a second, separate `yes`
+prompt afterward naming every assignment that's about to be permanently
+deleted — a group-only "yes" can't accidentally take assignments with it.
+
+**A third gate if the file happens to name every group that currently
+exists.** This is the same `delete` command for every resource type in
+this tool (assignment groups, assignments, pages, announcements — see
+below): if what's being deleted matches the *entire* live set — easy to
+do by accident if a full export gets pointed at `delete` instead of a
+curated subset — typing `yes` isn't enough. It prints an explicit warning
+that nothing of that type would be left, and requires typing the course
+ID itself to proceed, so it can't be clicked through on autopilot the way
+a habitual "yes" can.
+
 ### Bulk create/update assignments
 
 Define assignments in a YAML file (see `examples/assignments.example.yaml`
@@ -308,6 +357,33 @@ Platform, stored outside the Assignment model entirely; it may only be
 reachable via the LTI tool's own credentials, not a personal API token.
 Set this one by hand in the Canvas UI.
 
+### Delete assignments
+
+`apply`, above, never deletes anything — leaving an assignment out of the
+file just leaves it alone in Canvas. To actually remove one, use `delete`
+with its own file (see `examples/assignments_delete.example.yaml`) — a
+flat list of names:
+
+```yaml
+assignments:
+  - "Old Homework 1"
+  - "Scrapped Quiz"
+```
+
+```
+python3 -m canvas_tools.cli assignments delete --course 10001 --file my_assignments_delete.yaml --dry-run
+python3 -m canvas_tools.cli assignments delete --course 10001 --file my_assignments_delete.yaml
+```
+
+Every name is checked against Canvas itself — freshly fetched, not a local
+export — before anything happens, so a stale file or a typo'd name fails
+loudly instead of silently doing nothing. Even without `--dry-run`, the
+real run always prints the full plan and requires typing `yes` before
+deleting anything. If the file happens to name _every_ assignment
+currently in the course, there's a further gate requiring you to type the
+course ID itself — see the same escalation under **Delete assignment
+groups**, above.
+
 ### Create/update pages
 
 Define pages in a YAML file (see `examples/pages.example.yaml`, or
@@ -323,6 +399,33 @@ Create these _before_ referencing them in a `modules apply` file — `Page`
 module items link to pages matched by title/`page_url`, they don't create
 pages themselves.
 
+### Delete pages
+
+`apply`, above, never deletes anything — leaving a page out of the file
+just leaves it alone in Canvas. To actually remove one, use `delete` with
+its own file (see `examples/pages_delete.example.yaml`) — a flat list of
+titles:
+
+```yaml
+pages:
+  - "Old Syllabus Draft"
+  - "Scrapped Page"
+```
+
+```
+python3 -m canvas_tools.cli pages delete --course 10001 --file my_pages_delete.yaml --dry-run
+python3 -m canvas_tools.cli pages delete --course 10001 --file my_pages_delete.yaml
+```
+
+Every title is checked against Canvas itself — freshly fetched, not a
+local export — before anything happens, so a stale file or a typo'd title
+fails loudly instead of silently doing nothing. Even without `--dry-run`,
+the real run always prints the full plan and requires typing `yes` before
+deleting anything. If the file happens to name _every_ page currently in
+the course, there's a further gate requiring you to type the course ID
+itself — see the same escalation under **Delete assignment groups**,
+above.
+
 ### Create/update announcements
 
 Define announcements in a YAML file (see
@@ -335,6 +438,33 @@ instead of posting immediately.
 python3 -m canvas_tools.cli announcements apply --course 10001 --file my_announcements.yaml --dry-run
 python3 -m canvas_tools.cli announcements apply --course 10001 --file my_announcements.yaml
 ```
+
+### Delete announcements
+
+`apply`, above, never deletes anything — leaving an announcement out of
+the file just leaves it alone in Canvas. To actually remove one, use
+`delete` with its own file (see
+`examples/announcements_delete.example.yaml`) — a flat list of titles:
+
+```yaml
+announcements:
+  - "Old Reminder"
+  - "Outdated Notice"
+```
+
+```
+python3 -m canvas_tools.cli announcements delete --course 10001 --file my_announcements_delete.yaml --dry-run
+python3 -m canvas_tools.cli announcements delete --course 10001 --file my_announcements_delete.yaml
+```
+
+Every title is checked against Canvas itself — freshly fetched, not a
+local export — before anything happens, so a stale file or a typo'd title
+fails loudly instead of silently doing nothing. Even without `--dry-run`,
+the real run always prints the full plan and requires typing `yes` before
+deleting anything. If the file happens to name _every_ announcement
+currently in the course, there's a further gate requiring you to type the
+course ID itself — see the same escalation under **Delete assignment
+groups**, above.
 
 ### Post one announcement to multiple courses
 
@@ -367,6 +497,15 @@ content either. Still, **always run** **`--dry-run`** **first** — a stale or
 incomplete file will delete real course structure, not leave it alone.
 This is the opposite of `assignments`/`pages`/`announcements` apply, which
 never delete anything regardless of what's left out of the file.
+
+A routine partial edit (dropping a module or two while restructuring)
+stays frictionless — no confirmation prompt, same as it's always worked.
+But if the file happens to share **no** module names with what's
+currently in the course at all — wrong file, wrong `--course`, or a
+near-empty file applied by mistake — every existing module would be
+deleted in one shot. That case gets the same course-id escalation as the
+dedicated `delete` commands (see **Delete assignment groups**, above)
+before anything happens, including creating the file's own modules.
 
 Define modules and their items in a YAML file (see
 `examples/modules.example.yaml`, or `examples/modules.example.json`).

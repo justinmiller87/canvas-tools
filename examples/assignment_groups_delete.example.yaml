@@ -1,0 +1,25 @@
+# Example input for: canvas assignment_groups delete --course <ID> --file this.yaml
+#
+# Every group named here is re-checked against Canvas itself (not a local
+# export) before anything happens. If a group still has assignments in it,
+# you must say what to do with them — pick exactly one:
+#   - move_assignments_to: <existing group name>   moves them out first,
+#                                                    then deletes the (now
+#                                                    empty) group
+#   - delete_assignments: true                      deletes them along with
+#                                                    the group — permanent,
+#                                                    and asks for a second,
+#                                                    separate confirmation
+# A group with no assignments in it needs neither field.
+#
+# Always run with --dry-run first. The real run still asks for an explicit
+# "yes" (and a second "yes" if any assignment deletion is involved) before
+# touching anything.
+assignment_groups:
+  - name: "Old Homework"
+    move_assignments_to: "Homework"
+
+  - name: "Empty Leftover Group"
+
+  - name: "Scrapped Unit"
+    delete_assignments: true
