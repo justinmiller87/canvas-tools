@@ -55,6 +55,34 @@ python3 -m canvas_tools.cli courses list --state unpublished
 
 Prints `id  course_code  name` — grab the ID for use in other commands.
 
+### Keeping local files in sync after apply/delete
+
+Every `apply` and `delete` command — for every resource type — ends by
+offering to immediately re-export Canvas's live state back to the
+course's conventional file for that resource:
+
+```
+Re-export course 10001's current state to 'exports/course_10001_.../assignments.yaml'? [y/N]:
+```
+
+That target is always the file `{kind} export` would normally write —
+`assignments.yaml`, `assignment_groups.yaml`, `pages.yaml`,
+`announcements.yaml`, or `modules.yaml` — in whatever directory `--file`
+lives in, matching its format (`.yaml` vs `.json`). It's deliberately
+**not** just whatever `--file` happened to be named: applying from a
+scratch/edit copy like `assignments_new.yaml` still resyncs the course's
+real `assignments.yaml`, exactly as if you'd run `assignments export`
+right after — not the scratch file itself. Answering `n` (or anything
+else) leaves that file untouched, and `--dry-run` never asks at all,
+since nothing changed to sync.
+
+This exists because that file can silently drift out of sync with
+anything changed outside it — directly in the Canvas UI, or by a separate
+`apply`/`delete` run — and a later `apply` against the stale copy can undo
+those changes, e.g. by recreating something that was just deleted.
+Answering `y` closes that gap immediately instead of relying on a manual
+`export` afterward.
+
 ### Order of operations, when creating new content
 
 If everything you're applying already exists (you're just editing content),

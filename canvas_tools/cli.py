@@ -290,6 +290,41 @@ def _find_assignment_group_by_name(groups, name):
 ASSIGNMENT_GROUP_FIELDS = ("name", "position", "group_weight")
 
 
+def _conventional_export_path(file_path, kind):
+    """The file `{kind} export` would normally write for whatever directory
+    --file lives in — e.g. .../course_29457_.../assignments.yaml — matching
+    the same format (.yaml vs .json) --file itself used. Deliberately
+    ignores --file's own name: applying from a scratch/edit copy like
+    assignments_new.yaml should still resync the course's real
+    assignments.yaml, the one `assignmentsx` would write, not that scratch
+    file."""
+    directory = os.path.dirname(file_path)
+    ext = os.path.splitext(file_path)[1].lstrip(".") or "yaml"
+    return os.path.join(directory, f"{kind}.{ext}")
+
+
+def _offer_resync(args, c, export_fn, kind, **export_kwargs):
+    """After a real (non-dry-run) apply or delete completes, offer to
+    immediately re-export Canvas's live state back to the course's
+    conventional file for this resource type — the same file/directory
+    `{kind} export` would normally write, regardless of what --file was
+    actually named. Without this, that file silently drifts out of sync
+    with anything changed outside it (directly in the Canvas UI, or by a
+    separate `apply`/`delete` run) — and a later `apply` against the stale
+    copy can undo those changes, e.g. by recreating something already
+    deleted. Purely a convenience prompt: anything but y/yes leaves it
+    untouched."""
+    if args.dry_run:
+        return
+    target = _conventional_export_path(args.file, kind)
+    reply = input(f"\nRe-export course {args.course}'s current state to {target!r}? [y/N]: ").strip().lower()
+    if reply not in ("y", "yes"):
+        return
+    data = export_fn(c, args.course, **export_kwargs)
+    dump_data(data, target, header_comment=f"# Exported from course {args.course} — schema matches `canvas {kind} apply`\n")
+    print(f"wrote {len(data[kind])} {kind} -> {target}")
+
+
 def cmd_assignment_groups_apply(args, c):
     with open(args.file) as f:
         spec = yaml.safe_load(f)
@@ -322,6 +357,7 @@ def cmd_assignment_groups_apply(args, c):
             if args.verbose:
                 print(f"created: {name} (id={created['id']})")
     progress.done()
+    _offer_resync(args, c, export_assignment_groups, "assignment_groups")
 
 
 def _confirm_wipe_everything(args, kind, total_count):
@@ -557,6 +593,7 @@ def cmd_assignment_groups_delete(args, c):
         if args.verbose:
             print(f"deleted: {p['group']['name']} (id={p['group']['id']})")
     progress.done()
+    _offer_resync(args, c, export_assignment_groups, "assignment_groups")
 
 
 def cmd_assignments_apply(args, c):
@@ -649,6 +686,7 @@ def cmd_assignments_apply(args, c):
                 if args.verbose:
                     print(f"  rubric attached: {rubric_title}")
     progress.done()
+    _offer_resync(args, c, export_assignments, "assignments")
 
 
 def cmd_assignments_delete(args, c):
@@ -662,6 +700,7 @@ def cmd_assignments_delete(args, c):
         if args.verbose:
             print(f"deleted: {m['name']} (id={m['id']})")
     progress.done()
+    _offer_resync(args, c, export_assignments, "assignments")
 
 
 def _find_page_by_title(pages, title):
@@ -721,6 +760,7 @@ def cmd_pages_apply(args, c):
             if args.verbose:
                 print(f"created: {title} (url={created['url']})")
     progress.done()
+    _offer_resync(args, c, export_pages, "pages", verbose=args.verbose)
 
 
 def cmd_pages_delete(args, c):
@@ -734,6 +774,7 @@ def cmd_pages_delete(args, c):
         if args.verbose:
             print(f"deleted: {m['title']} (url={m['url']})")
     progress.done()
+    _offer_resync(args, c, export_pages, "pages", verbose=args.verbose)
 
 
 def _find_announcement_by_title(announcements, title):
@@ -802,6 +843,7 @@ def cmd_announcements_apply(args, c):
             if args.verbose:
                 print(f"created: {title} (id={created['id']})")
     progress.done()
+    _offer_resync(args, c, export_announcements, "announcements")
 
 
 def cmd_announcements_delete(args, c):
@@ -824,6 +866,7 @@ def cmd_announcements_delete(args, c):
         if args.verbose:
             print(f"deleted: {m['title']} (id={m['id']})")
     progress.done()
+    _offer_resync(args, c, export_announcements, "announcements")
 
 
 def _module_item_payload(
@@ -1071,6 +1114,8 @@ def cmd_modules_apply(args, c):
                         f"courses/{args.course}/modules/{module_id}/items/{created_item['id']}",
                         json={"module_item": {"published": item["published"]}},
                     )
+
+    _offer_resync(args, c, export_modules, "modules")
 
 
 def cmd_copy(args, c):
