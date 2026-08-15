@@ -11,7 +11,7 @@ import yaml
 from canvas_tools.client import CanvasClient, CanvasError
 from canvas_tools.html_clean import clean_html
 from canvas_tools.rubrics import export_rubrics_csv, import_rubrics_csv, update_rubric_in_place, _parse_rubrics_csv
-from canvas_tools.export_course import export_assignments, export_pages, export_announcements, export_modules
+from canvas_tools.export_course import export_assignment_groups, export_assignments, export_pages, export_announcements, export_modules
 from canvas_tools.progress import Progress
 
 
@@ -21,6 +21,10 @@ def _write_single_yaml_export(args, c, export_fn, key, apply_cmd_name, **kwargs)
         f.write(f"# Exported from course {args.course} — schema matches `canvas {apply_cmd_name} apply`\n")
         yaml.dump(data, f, sort_keys=False, allow_unicode=True, width=100)
     print(f"wrote {len(data[key])} {key} -> {args.out}")
+
+
+def cmd_assignment_groups_export(args, c):
+    _write_single_yaml_export(args, c, export_assignment_groups, "assignment_groups", "assignment_groups")
 
 
 def cmd_assignments_export(args, c):
@@ -268,6 +272,54 @@ def _remove_rubric_association(c, course_id, assignment_id):
         return False
     c.delete(f"courses/{course_id}/rubric_associations/{association['_id']}")
     return True
+
+
+def _find_assignment_group_by_name(groups, name):
+    for g in groups:
+        if g["name"].strip().lower() == name.strip().lower():
+            return g
+    return None
+
+
+# Canvas's assignment_groups endpoint also has `rules` (drop lowest/highest,
+# never-drop) and `sis_source_id`, but those aren't wired in here — kept to
+# the fields actually verified live (create + update both confirmed against
+# a real course) rather than fields assumed from docs.
+ASSIGNMENT_GROUP_FIELDS = ("name", "position", "group_weight")
+
+
+def cmd_assignment_groups_apply(args, c):
+    with open(args.file) as f:
+        spec = yaml.safe_load(f)
+
+    items = spec.get("assignment_groups", spec if isinstance(spec, list) else [])
+    if not items:
+        print("No assignment groups found in file.")
+        return
+
+    existing = c.get(f"courses/{args.course}/assignment_groups", params={"per_page": 100})
+
+    progress = Progress(len(items), "assignment groups", verbose=args.verbose)
+    for item in items:
+        progress.step(item.get("name"))
+        name = item["name"]
+        body = {k: v for k, v in item.items() if k in ASSIGNMENT_GROUP_FIELDS and v is not None}
+        match = _find_assignment_group_by_name(existing, name)
+        if match:
+            if args.dry_run:
+                print(f"[dry-run] would UPDATE assignment group {match['id']!r}: {name}")
+                continue
+            c.put(f"courses/{args.course}/assignment_groups/{match['id']}", json=body)
+            if args.verbose:
+                print(f"updated: {name} (id={match['id']})")
+        else:
+            if args.dry_run:
+                print(f"[dry-run] would CREATE assignment group: {name}")
+                continue
+            created = c.post(f"courses/{args.course}/assignment_groups", json=body)
+            if args.verbose:
+                print(f"created: {name} (id={created['id']})")
+    progress.done()
 
 
 def cmd_assignments_apply(args, c):
@@ -815,6 +867,18 @@ def build_parser():
     p_courses_list.add_argument("--state", default="available", help="Course state filter (default: available)")
     p_courses_list.add_argument("--term", action="store_true", help="(reserved) filter by current term")
     p_courses_list.set_defaults(func=cmd_courses_list)
+
+    p_ag = sub.add_parser("assignment_groups", help="Assignment group operations")
+    sub_ag = p_ag.add_subparsers(dest="subcommand", required=True)
+    p_ag_apply = sub_ag.add_parser("apply", help="Create/update assignment groups from a YAML file", parents=[verbose_parent])
+    p_ag_apply.add_argument("--course", required=True, help="Canvas course ID")
+    p_ag_apply.add_argument("--file", required=True, help="Path to assignment groups YAML file")
+    p_ag_apply.add_argument("--dry-run", action="store_true")
+    p_ag_apply.set_defaults(func=cmd_assignment_groups_apply)
+    p_ag_export = sub_ag.add_parser("export", help="Export this course's assignment groups to a YAML file", parents=[verbose_parent])
+    p_ag_export.add_argument("--course", required=True, help="Canvas course ID")
+    p_ag_export.add_argument("--out", required=True, help="Output YAML path")
+    p_ag_export.set_defaults(func=cmd_assignment_groups_export)
 
     p_assign = sub.add_parser("assignments", help="Assignment operations")
     sub_assign = p_assign.add_subparsers(dest="subcommand", required=True)

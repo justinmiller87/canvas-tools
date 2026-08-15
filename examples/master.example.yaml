@@ -1,14 +1,15 @@
 # Master reference: every option each `apply` command understands, for
-# modules, pages, assignments, and announcements — audited directly against
-# Canvas LMS's source (the actual permitted-params lists each controller
-# uses), not just its docs, which are incomplete in a few places noted
-# below. Each command reads only its own top-level key and ignores the
-# rest, so this one file works against any of them:
+# assignment groups, modules, pages, assignments, and announcements —
+# audited directly against Canvas LMS's source (the actual permitted-params
+# lists each controller uses), not just its docs, which are incomplete in a
+# few places noted below. Each command reads only its own top-level key and
+# ignores the rest, so this one file works against any of them:
 #
-#   python3 -m canvas_tools.cli assignments    apply --course ID --file master.example.yaml --dry-run
-#   python3 -m canvas_tools.cli pages          apply --course ID --file master.example.yaml --dry-run
-#   python3 -m canvas_tools.cli announcements  apply --course ID --file master.example.yaml --dry-run
-#   python3 -m canvas_tools.cli modules        apply --course ID --file master.example.yaml --dry-run
+#   python3 -m canvas_tools.cli assignment_groups apply --course ID --file master.example.yaml --dry-run
+#   python3 -m canvas_tools.cli assignments       apply --course ID --file master.example.yaml --dry-run
+#   python3 -m canvas_tools.cli pages             apply --course ID --file master.example.yaml --dry-run
+#   python3 -m canvas_tools.cli announcements     apply --course ID --file master.example.yaml --dry-run
+#   python3 -m canvas_tools.cli modules           apply --course ID --file master.example.yaml --dry-run
 #
 # This is meant to be read as a reference / copied from, not run blindly —
 # the modules section below links items (Assignment/Quiz/Discussion) that
@@ -47,6 +48,18 @@
 # whole extra subsystem to be useful (grading schemes, sections), or are
 # genuinely inapplicable to the field's normal use. Listed so the gap is
 # visible rather than silent.
+
+assignment_groups:
+  # Every field `assignment_groups apply` recognizes — a much smaller
+  # surface than assignments, since this is a simple, stable REST resource
+  # (unlike checkpoints, no GraphQL/schema surprises here). Matched by
+  # exact name, case-insensitive: existing groups are updated, new ones
+  # are created. `rules` (drop lowest/highest, never-drop) and
+  # `sis_source_id` are real fields on this endpoint but not wired into
+  # this tool.
+  - name: "Discussion Assignments"              # REQUIRED — used to match an existing group, or as the name on create
+    position: 1                                 # optional — display order among the course's assignment groups
+    group_weight: 20.0                          # optional — percentage of the total grade this group is worth; only meaningful if the course's grading scheme actually uses weighted assignment groups
 
 assignments:
   # Minimal example.

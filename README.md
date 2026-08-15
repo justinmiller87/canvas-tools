@@ -63,9 +63,10 @@ currently live. It only matters when a file references something *by name*
 that doesn't exist in Canvas yet, since that lookup happens at apply-time,
 not after everything finishes:
 
-1. **Rubrics** first — an assignment's `rubric:` field has to match a rubric
-   that already exists in the course (`rubrics import`/`rubrics update`
-   don't get resolved automatically by `assignments apply`).
+1. **Rubrics and assignment groups** first — an assignment's `rubric:` and
+   `assignment_group:` fields each have to match something that already
+   exists in the course; neither gets created automatically by
+   `assignments apply`.
 2. **Assignments and pages** next — `modules apply`'s `Assignment`/`Page`
    items are matched by title/`page_url` against existing content; they
    don't create it. Assignments and pages don't depend on each other, so
@@ -83,9 +84,9 @@ go whenever.
 
 ### Export an existing course from Canvas to local files
 
-Pulls a live course's rubrics,
-assignments, pages, announcements, and modules and writes them out as
-`rubrics/<title>.csv` (one file per rubric) / `assignments.yaml` /
+Pulls a live course's rubrics, assignment groups, assignments, pages,
+announcements, and modules and writes them out as `rubrics/<title>.csv`
+(one file per rubric) / `assignment_groups.yaml` / `assignments.yaml` /
 `pages.yaml` / `announcements.yaml` / `modules.yaml` in the same schema
 their respective `apply`/`import`/`update` commands expect. Useful for
 seeing how a real built course maps to these tools, or as a starting
@@ -129,12 +130,13 @@ a dozen sections; the sanitized code (Canvas course codes look like
 without having to look it up.
 
 **This overwrites every local file for the course with whatever is
-currently live in Canvas** — assignments.yaml, pages.yaml,
-announcements.yaml, modules.yaml, and the rubric CSVs all get replaced in
-one pass. If you have local edits in any of those files that haven't been
-pushed to Canvas yet (`apply`'d) or committed, running this discards them
-silently — confirmed the hard way earlier in this project's history. Push
-or commit pending edits _before_ pulling a fresh export, not after.
+currently live in Canvas** — assignment_groups.yaml, assignments.yaml,
+pages.yaml, announcements.yaml, modules.yaml, and the rubric CSVs all get
+replaced in one pass. If you have local edits in any of those files that
+haven't been pushed to Canvas yet (`apply`'d) or committed, running this
+discards them silently — confirmed the hard way earlier in this project's
+history. Push or commit pending edits _before_ pulling a fresh export, not
+after.
 
 If you only need to refresh one file — say you fixed a single assignment
 by hand in the Canvas UI and don't want to touch pages/modules/
@@ -143,13 +145,36 @@ subcommand instead. These take a literal file path (not a parent
 directory), so point them at the file inside the course's existing folder:
 
 ```
-python3 -m canvas_tools.cli assignments   export --course 10001 --out "exports/course_10001_26-FA_XXX-100-OL01/assignments.yaml"
-python3 -m canvas_tools.cli pages         export --course 10001 --out "exports/course_10001_26-FA_XXX-100-OL01/pages.yaml"
-python3 -m canvas_tools.cli announcements export --course 10001 --out "exports/course_10001_26-FA_XXX-100-OL01/announcements.yaml"
-python3 -m canvas_tools.cli modules       export --course 10001 --out "exports/course_10001_26-FA_XXX-100-OL01/modules.yaml"
+python3 -m canvas_tools.cli assignment_groups export --course 10001 --out "exports/course_10001_26-FA_XXX-100-OL01/assignment_groups.yaml"
+python3 -m canvas_tools.cli assignments      export --course 10001 --out "exports/course_10001_26-FA_XXX-100-OL01/assignments.yaml"
+python3 -m canvas_tools.cli pages            export --course 10001 --out "exports/course_10001_26-FA_XXX-100-OL01/pages.yaml"
+python3 -m canvas_tools.cli announcements    export --course 10001 --out "exports/course_10001_26-FA_XXX-100-OL01/announcements.yaml"
+python3 -m canvas_tools.cli modules          export --course 10001 --out "exports/course_10001_26-FA_XXX-100-OL01/modules.yaml"
 ```
 
 Each overwrites only the one file it targets.
+
+### Create/update assignment groups
+
+Define assignment groups in a YAML file. Matched by exact name
+(case-insensitive): existing groups are updated, new ones are created.
+Fields: `name` (required), `position` (optional — display order), and
+`group_weight` (optional — only meaningful if the course uses weighted
+assignment groups for grading). Create these _before_ referencing them in
+an `assignments apply` file — `assignment_group:` there matches by name
+against existing groups, it doesn't create one.
+
+```yaml
+assignment_groups:
+  - name: "Discussion Assignments"
+    position: 1
+    group_weight: 20.0
+```
+
+```
+python3 -m canvas_tools.cli assignment_groups apply --course 10001 --file my_groups.yaml --dry-run
+python3 -m canvas_tools.cli assignment_groups apply --course 10001 --file my_groups.yaml
+```
 
 ### Bulk create/update assignments
 
@@ -164,10 +189,11 @@ listed here). Matching for create-vs-update is by exact assignment name
 (case-insensitive) within the target course.
 
 Two fields are names, not raw Canvas IDs, and get resolved automatically:
-`assignment_group` (matched against the course's assignment groups) and
-`group_category` (matched against the course's group sets, for group
-assignments — pair with `grade_group_students_individually`). Both must
-already exist in the course.
+`assignment_group` (matched against the course's assignment groups —
+create one first with `assignment_groups apply`, above, if it doesn't
+exist yet) and `group_category` (matched against the course's group sets,
+for group assignments — pair with `grade_group_students_individually`).
+Both must already exist in the course.
 
 `rubric: "Rubric Title"` attaches an existing rubric (matched by title —
 import one first with `rubrics import`, see below) to the assignment for

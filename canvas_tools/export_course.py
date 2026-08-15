@@ -48,6 +48,20 @@ def _literal_str_representer(dumper, data):
 yaml.add_representer(LiteralStr, _literal_str_representer)
 
 
+def export_assignment_groups(c, course_id):
+    groups = c.get(f"courses/{course_id}/assignment_groups", params={"per_page": 100})
+    groups.sort(key=lambda g: (g.get("position") or 0))
+    out = []
+    for g in groups:
+        item = {"name": g["name"]}
+        if g.get("position") is not None:
+            item["position"] = g["position"]
+        if g.get("group_weight"):
+            item["group_weight"] = g["group_weight"]
+        out.append(item)
+    return {"assignment_groups": out}
+
+
 def export_assignments(c, course_id):
     assignments = c.get(
         f"courses/{course_id}/assignments", params={"per_page": 100, "include[]": "checkpoints"}
@@ -210,6 +224,12 @@ def export_one_course(c, course_id, out_parent, verbose=False):
         with open(os.path.join(rubrics_dir, filename), "w", newline="") as f:
             f.write(csv_text)
     print(f"wrote {len(rubric_files)} rubrics -> {rubrics_dir}/")
+
+    assignment_groups = export_assignment_groups(c, course_id)
+    with open(os.path.join(out, "assignment_groups.yaml"), "w") as f:
+        f.write(f"# Exported from course {course_id} — schema matches `canvas assignment_groups apply`\n")
+        yaml.dump(assignment_groups, f, sort_keys=False, allow_unicode=True, width=100)
+    print(f"wrote {len(assignment_groups['assignment_groups'])} assignment groups -> {out}/assignment_groups.yaml")
 
     assignments = export_assignments(c, course_id)
     with open(os.path.join(out, "assignments.yaml"), "w") as f:
