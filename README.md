@@ -181,6 +181,23 @@ explicit choice. **Don't use this to edit an existing rubric's content —
 use** **`rubrics update`** **instead, with the instructions below.** `remove_rubric` here is for the narrower case of
 detaching a rubric from one assignment and _not_ replacing it.
 
+**Checkpointed discussions** (two required submissions — an initial post
+plus required replies, each with its own due date/points) are handled
+through `checkpoints:`, a list of `{tag, points_possible, due_at,
+replies_required}` entries (`tag` is `reply_to_topic` or `reply_to_entry`).
+Canvas's REST API can't read or write checkpoint data at all — this goes
+through the same GraphQL mutations the redesigned Discussions UI uses
+internally, confirmed via schema introspection against a live instance.
+Updating an existing checkpointed discussion's dates/points works like any
+other field (matched by name, blank checkpoint fields fall back to the
+current live value); creating a brand-new one needs both checkpoints given
+in full, since there's no live checkpoint yet to fall back to. Either way,
+`due_at`/`unlock_at`/`lock_at` on the assignment entry itself are ignored —
+Canvas rejects any date/availability field on a checkpointed discussion's
+parent assignment (confirmed live, not documented anywhere); all of that
+lives on the checkpoints. See `examples/master.example.yaml` for the full
+field reference and both the update and create shapes.
+
 ```
 python3 -m canvas_tools.cli assignments apply --course 10001 --file my_assignments.yaml --dry-run
 python3 -m canvas_tools.cli assignments apply --course 10001 --file my_assignments.yaml

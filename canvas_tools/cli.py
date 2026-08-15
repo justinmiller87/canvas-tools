@@ -183,13 +183,18 @@ def _create_checkpointed_discussion(c, course_id, name, item, checkpoints_spec):
             entry["repliesRequired"] = spec.get("replies_required") or 1
         gql_checkpoints.append(entry)
 
+    # Canvas rejects due_at/lock_at/unlock_at on the parent assignment for a
+    # checkpointed discussion — confirmed live, not documented anywhere
+    # ("Cannot set lock_at in the parent assignment for checkpoints", then
+    # the same for unlock_at once lock_at was removed; Canvas validates one
+    # field at a time rather than reporting every violation at once). Not
+    # caught by schema introspection since the fields themselves are
+    # accepted by the schema, only their use here is rejected at the
+    # resolver level. All date/availability info for a checkpointed
+    # discussion lives entirely on the checkpoints themselves.
     assignment_input = {"courseId": str(course_id), "name": name, "forCheckpoints": True}
     if item.get("assignment_group_id") is not None:
         assignment_input["assignmentGroupId"] = str(item["assignment_group_id"])
-    if item.get("unlock_at"):
-        assignment_input["unlockAt"] = item["unlock_at"]
-    if item.get("lock_at"):
-        assignment_input["lockAt"] = item["lock_at"]
 
     input_ = {
         "contextId": str(course_id),
