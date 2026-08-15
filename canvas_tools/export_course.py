@@ -4,6 +4,7 @@ schema used by `canvas assignments apply` / `canvas modules apply`, so a real
 built course can be inspected (or reused as a template) locally.
 """
 import argparse
+import json
 import os
 
 import yaml
@@ -46,6 +47,26 @@ def _literal_str_representer(dumper, data):
 
 
 yaml.add_representer(LiteralStr, _literal_str_representer)
+
+
+def dump_data(data, path, header_comment=None):
+    """Write `data` to `path` as YAML (default) or JSON, based on the `.json`
+    extension on `path`. Every `apply` command already reads either format
+    for free — YAML is a syntactic superset of JSON, so `yaml.safe_load()`
+    parses a plain JSON file correctly with no code changes needed (verified
+    directly, not assumed) — this is only needed for the write side.
+    `header_comment` (the "# Exported from course X..." banner some files
+    get) is YAML-only, since JSON has no comment syntax; it's silently
+    omitted for JSON output rather than corrupting the file."""
+    if path.lower().endswith(".json"):
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+    else:
+        with open(path, "w") as f:
+            if header_comment:
+                f.write(header_comment)
+            yaml.dump(data, f, sort_keys=False, allow_unicode=True, width=100)
 
 
 def export_assignment_groups(c, course_id):
@@ -211,7 +232,8 @@ def _course_folder_name(course_id, course_code):
     return f"course_{course_id}_{safe_code}" if safe_code else f"course_{course_id}"
 
 
-def export_one_course(c, course_id, out_parent, verbose=False):
+def export_one_course(c, course_id, out_parent, verbose=False, fmt="yaml"):
+    ext = "json" if fmt == "json" else "yaml"
     course_code = c.get(f"courses/{course_id}").get("course_code")
     out = os.path.join(out_parent, _course_folder_name(course_id, course_code))
     os.makedirs(out, exist_ok=True)
@@ -226,40 +248,50 @@ def export_one_course(c, course_id, out_parent, verbose=False):
     print(f"wrote {len(rubric_files)} rubrics -> {rubrics_dir}/")
 
     assignment_groups = export_assignment_groups(c, course_id)
-    with open(os.path.join(out, "assignment_groups.yaml"), "w") as f:
-        f.write(f"# Exported from course {course_id} — schema matches `canvas assignment_groups apply`\n")
-        yaml.dump(assignment_groups, f, sort_keys=False, allow_unicode=True, width=100)
-    print(f"wrote {len(assignment_groups['assignment_groups'])} assignment groups -> {out}/assignment_groups.yaml")
+    dump_data(
+        assignment_groups,
+        os.path.join(out, f"assignment_groups.{ext}"),
+        header_comment=f"# Exported from course {course_id} — schema matches `canvas assignment_groups apply`\n",
+    )
+    print(f"wrote {len(assignment_groups['assignment_groups'])} assignment groups -> {out}/assignment_groups.{ext}")
 
     assignments = export_assignments(c, course_id)
-    with open(os.path.join(out, "assignments.yaml"), "w") as f:
-        f.write(f"# Exported from course {course_id} — schema matches `canvas assignments apply`\n")
-        yaml.dump(assignments, f, sort_keys=False, allow_unicode=True, width=100)
-    print(f"wrote {len(assignments['assignments'])} assignments -> {out}/assignments.yaml")
+    dump_data(
+        assignments,
+        os.path.join(out, f"assignments.{ext}"),
+        header_comment=f"# Exported from course {course_id} — schema matches `canvas assignments apply`\n",
+    )
+    print(f"wrote {len(assignments['assignments'])} assignments -> {out}/assignments.{ext}")
 
     pages = export_pages(c, course_id, verbose=verbose)
-    with open(os.path.join(out, "pages.yaml"), "w") as f:
-        f.write(f"# Exported from course {course_id} — schema matches `canvas pages apply`\n")
-        yaml.dump(pages, f, sort_keys=False, allow_unicode=True, width=100)
-    print(f"wrote {len(pages['pages'])} pages -> {out}/pages.yaml")
+    dump_data(
+        pages,
+        os.path.join(out, f"pages.{ext}"),
+        header_comment=f"# Exported from course {course_id} — schema matches `canvas pages apply`\n",
+    )
+    print(f"wrote {len(pages['pages'])} pages -> {out}/pages.{ext}")
 
     announcements = export_announcements(c, course_id)
-    with open(os.path.join(out, "announcements.yaml"), "w") as f:
-        f.write(f"# Exported from course {course_id} — schema matches `canvas announcements apply`\n")
-        yaml.dump(announcements, f, sort_keys=False, allow_unicode=True, width=100)
-    print(f"wrote {len(announcements['announcements'])} announcements -> {out}/announcements.yaml")
+    dump_data(
+        announcements,
+        os.path.join(out, f"announcements.{ext}"),
+        header_comment=f"# Exported from course {course_id} — schema matches `canvas announcements apply`\n",
+    )
+    print(f"wrote {len(announcements['announcements'])} announcements -> {out}/announcements.{ext}")
 
     modules = export_modules(c, course_id)
-    with open(os.path.join(out, "modules.yaml"), "w") as f:
-        f.write(f"# Exported from course {course_id} — schema matches `canvas modules apply`\n")
-        f.write(
+    dump_data(
+        modules,
+        os.path.join(out, f"modules.{ext}"),
+        header_comment=(
+            f"# Exported from course {course_id} — schema matches `canvas modules apply`\n"
             "# `modules apply` treats this file as the exact, complete set of modules and\n"
             "# items — a module or item missing from this file gets DELETED from the course,\n"
             "# not just left alone. Always --dry-run before applying an edited copy of this file.\n"
-        )
-        yaml.dump(modules, f, sort_keys=False, allow_unicode=True, width=100)
+        ),
+    )
     total_items = sum(len(m["items"]) for m in modules["modules"])
-    print(f"wrote {len(modules['modules'])} modules / {total_items} items -> {out}/modules.yaml")
+    print(f"wrote {len(modules['modules'])} modules / {total_items} items -> {out}/modules.{ext}")
 
 
 def main():
@@ -282,6 +314,13 @@ def main():
         "course_<id>_<course code>, is created underneath it",
     )
     p.add_argument("--verbose", action="store_true", help="Print each item as it's fetched instead of a progress bar")
+    p.add_argument(
+        "--format",
+        choices=["yaml", "json"],
+        default="yaml",
+        help="Output format for the written files (default: yaml). JSON files work with every "
+        "`apply` command too, just without comments and without multi-line-friendly HTML.",
+    )
     args = p.parse_args()
 
     if args.match and not args.all:
@@ -308,7 +347,7 @@ def main():
         if len(course_ids) > 1:
             print(f"\n=== [{i + 1}/{len(course_ids)}] course {course_id} ===")
         try:
-            export_one_course(c, course_id, args.out, verbose=args.verbose)
+            export_one_course(c, course_id, args.out, verbose=args.verbose, fmt=args.format)
         except CanvasError as e:
             print(f"course {course_id}: ERROR — {e}")
             failed.append(course_id)

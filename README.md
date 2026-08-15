@@ -129,6 +129,18 @@ a dozen sections; the sanitized code (Canvas course codes look like
 `-` and spaces become `_`) makes it obvious which folder is which course
 without having to look it up.
 
+`--format json` writes `.json` files instead of `.yaml` (rubrics stay CSV
+either way — that format is dictated by Canvas's own rubric import
+endpoint, not a style choice). Every `apply` command already reads either
+format with no changes needed — YAML is a syntactic superset of JSON, so
+`yaml.safe_load()` parses a plain JSON file correctly (confirmed directly,
+not assumed) — so a hand-written `.json` file works today even without
+`--format json`. The one thing JSON loses: no comments, and multi-line
+HTML shows up as one line with escaped `\n`s instead of YAML's readable
+block-literal style, which matters more the more you're hand-editing
+descriptions/bodies. `assignments export`/`pages export`/etc. (below) also
+switch to JSON if you give them an `--out` path ending in `.json`.
+
 **This overwrites every local file for the course with whatever is
 currently live in Canvas** — assignment_groups.yaml, assignments.yaml,
 pages.yaml, announcements.yaml, modules.yaml, and the rubric CSVs all get

@@ -48,6 +48,13 @@
 # whole extra subsystem to be useful (grading schemes, sections), or are
 # genuinely inapplicable to the field's normal use. Listed so the gap is
 # visible rather than silent.
+#
+# This same schema also works as plain JSON (an equivalent .json file, same
+# field names/nesting) — every `apply` command reads either with no changes
+# needed, since YAML is a syntactic superset of JSON. You lose comments and
+# YAML's multi-line block-literal style for HTML content, which is exactly
+# why this particular reference file is YAML — but a `.json` file works
+# today, and `export`/`export_course.py --format json` write one too.
 
 assignment_groups:
   # Every field `assignment_groups apply` recognizes — a much smaller

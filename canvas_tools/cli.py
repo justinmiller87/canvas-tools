@@ -11,15 +11,15 @@ import yaml
 from canvas_tools.client import CanvasClient, CanvasError
 from canvas_tools.html_clean import clean_html
 from canvas_tools.rubrics import export_rubrics_csv, import_rubrics_csv, update_rubric_in_place, _parse_rubrics_csv
-from canvas_tools.export_course import export_assignment_groups, export_assignments, export_pages, export_announcements, export_modules
+from canvas_tools.export_course import export_assignment_groups, export_assignments, export_pages, export_announcements, export_modules, dump_data
 from canvas_tools.progress import Progress
 
 
 def _write_single_yaml_export(args, c, export_fn, key, apply_cmd_name, **kwargs):
     data = export_fn(c, args.course, **kwargs)
-    with open(args.out, "w") as f:
-        f.write(f"# Exported from course {args.course} — schema matches `canvas {apply_cmd_name} apply`\n")
-        yaml.dump(data, f, sort_keys=False, allow_unicode=True, width=100)
+    dump_data(
+        data, args.out, header_comment=f"# Exported from course {args.course} — schema matches `canvas {apply_cmd_name} apply`\n"
+    )
     print(f"wrote {len(data[key])} {key} -> {args.out}")
 
 
@@ -41,14 +41,16 @@ def cmd_announcements_export(args, c):
 
 def cmd_modules_export(args, c):
     data = export_modules(c, args.course)
-    with open(args.out, "w") as f:
-        f.write(f"# Exported from course {args.course} — schema matches `canvas modules apply`\n")
-        f.write(
+    dump_data(
+        data,
+        args.out,
+        header_comment=(
+            f"# Exported from course {args.course} — schema matches `canvas modules apply`\n"
             "# `modules apply` treats this file as the exact, complete set of modules and\n"
             "# items — a module or item missing from this file gets DELETED from the course,\n"
             "# not just left alone. Always --dry-run before applying an edited copy of this file.\n"
-        )
-        yaml.dump(data, f, sort_keys=False, allow_unicode=True, width=100)
+        ),
+    )
     total_items = sum(len(m["items"]) for m in data["modules"])
     print(f"wrote {len(data['modules'])} modules / {total_items} items -> {args.out}")
 
