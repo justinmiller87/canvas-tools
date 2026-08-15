@@ -250,6 +250,12 @@ def main():
         "--all", action="store_true", help="Export every course you teach (an initial full sync)"
     )
     p.add_argument(
+        "--match",
+        help="Only with --all: case-insensitive substring to match against each course's code or "
+        "name (e.g. '26/FA' to export just one term — not limited to that format, matches "
+        "whatever text your school's course codes/names actually contain)",
+    )
+    p.add_argument(
         "--out",
         default="exports",
         help="Parent directory (default: exports) — each course's own subfolder, named "
@@ -258,10 +264,18 @@ def main():
     p.add_argument("--verbose", action="store_true", help="Print each item as it's fetched instead of a progress bar")
     args = p.parse_args()
 
+    if args.match and not args.all:
+        p.error("--match only applies with --all")
+
     c = CanvasClient()
 
     if args.all:
         courses = c.get("courses", params={"per_page": 100, "enrollment_type": "teacher", "state[]": "available"})
+        if args.match:
+            needle = args.match.lower()
+            matched = [co for co in courses if needle in (co.get("course_code") or "").lower() or needle in (co.get("name") or "").lower()]
+            print(f"matched {len(matched)}/{len(courses)} courses against {args.match!r}")
+            courses = matched
         course_ids = [str(co["id"]) for co in courses]
         if not course_ids:
             print("No courses found.")

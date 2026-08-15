@@ -68,6 +68,7 @@ update`, or to import fresh into a _different_ course.
 python3 -m canvas_tools.export_course --course 10001 --out exports
 python3 -m canvas_tools.export_course --course 10001 10002 10003 --out exports
 python3 -m canvas_tools.export_course --all --out exports
+python3 -m canvas_tools.export_course --all --match "26/FA" --out exports
 ```
 
 `--course` takes one or more course IDs — each gets exported in turn, its
@@ -78,6 +79,13 @@ onto a new machine. `--course` and `--all` are mutually exclusive. In a
 multi-course run, one course failing (e.g. a bad ID) prints an error and
 continues on to the rest rather than aborting the whole run; a summary of
 how many succeeded prints at the end.
+
+`--match TEXT` (only with `--all`) narrows that to courses whose code or
+name contains `TEXT`, case-insensitive — e.g. only exporting one term.
+It's a plain substring match against whatever your school's actual course
+codes/names contain, not tied to any particular format — some schools'
+codes look like `26/FA XXX-100-OL01`, in which case `--match "26/FA"`
+grabs just that term, but the match itself doesn't assume that shape.
 
 `--out` is the _parent_ directory (default: `exports`) — each course's own
 subfolder is created underneath it automatically, named
