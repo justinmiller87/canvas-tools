@@ -282,6 +282,16 @@ the way it is above):
 python3 -m canvas_tools.cli assignments apply --course 10001 --file my_one_fix.json
 ```
 
+To spell out the rule those examples are demonstrating: within one
+assignment entry, `name` is the only field that's always required (it's
+what matches the existing assignment) — every other field is optional on
+update, and simply **leaving a field out of the entry entirely** is what
+tells this tool to not touch it on Canvas, not to clear it. That's the
+"blank means don't touch" convention this whole tool follows, and it's why
+a two-line entry like the one above is enough to change just one field on
+an assignment with 20+ fields set — nothing else in the file gets sent to
+Canvas at all, so nothing else can be affected.
+
 **Not supported: plagiarism review (e.g. Turnitin/Copyleaks/VeriCite).**
 Verified directly against a live assignment — this setting isn't in the
 Assignments API response at all, isn't in any form field, and doesn't
