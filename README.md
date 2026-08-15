@@ -38,6 +38,12 @@ Run everything from this directory as a module:
 python3 -m canvas_tools.cli <command> ...
 ```
 
+Nothing in this toolkit is Linux-specific — it's plain Python with no
+shell-outs and no OS-specific paths, so it runs the same on macOS/Windows.
+The one thing to adjust is the command name itself: every example here
+uses `python3`, but a standard Windows Python install usually only
+provides `python` (or the `py` launcher) — substitute accordingly.
+
 ## Commands
 
 ### List your courses
@@ -48,6 +54,32 @@ python3 -m canvas_tools.cli courses list --state unpublished
 ```
 
 Prints `id  course_code  name` — grab the ID for use in other commands.
+
+### Order of operations, when creating new content
+
+If everything you're applying already exists (you're just editing content),
+order doesn't matter — each command matches by name/title against whatever's
+currently live. It only matters when a file references something *by name*
+that doesn't exist in Canvas yet, since that lookup happens at apply-time,
+not after everything finishes:
+
+1. **Rubrics** first — an assignment's `rubric:` field has to match a rubric
+   that already exists in the course (`rubrics import`/`rubrics update`
+   don't get resolved automatically by `assignments apply`).
+2. **Assignments and pages** next — `modules apply`'s `Assignment`/`Page`
+   items are matched by title/`page_url` against existing content; they
+   don't create it. Assignments and pages don't depend on each other, so
+   their order relative to one another doesn't matter.
+3. **Modules last** — not because anything strictly requires it, but because
+   `modules apply` is the one destructive, full-sync command (see below), so
+   running it after everything else has settled avoids syncing against
+   content that's still about to change.
+
+**Announcements aren't part of this chain at all.** A module item can only
+be `ExternalUrl`, `SubHeader`, `Page`, `Assignment`, `Quiz`, `Discussion`,
+`File`, or `ExternalTool` — there's no way to link an announcement into a
+module, so announcements have no ordering dependency with anything and can
+go whenever.
 
 ### Export an existing course from Canvas to local files
 
