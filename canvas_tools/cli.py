@@ -140,6 +140,77 @@ def _apply_discussion_checkpoints(c, course_id, assignment_id, checkpoints_spec)
         raise CanvasError(f"checkpoint update rejected: {errors}")
 
 
+_CREATE_CHECKPOINTED_DISCUSSION_MUTATION = """
+mutation CreateCheckpointedDiscussion($input: CreateDiscussionTopicInput!) {
+  createDiscussionTopic(input: $input) {
+    discussionTopic { _id assignment { _id } }
+    errors { attribute message }
+  }
+}
+"""
+
+
+def _create_checkpointed_discussion(c, course_id, name, item, checkpoints_spec):
+    """Create a brand-new checkpointed discussion (two required sub-assignments,
+    reply_to_topic + reply_to_entry) from scratch. Canvas's REST API can't do
+    this at all — same as it can't update an existing checkpointed discussion's
+    dates (see _apply_discussion_checkpoints) — but unlike that gap, this one
+    isn't a hard limit: schema introspection against a live instance confirmed
+    `createDiscussionTopic`'s input type also accepts a `checkpoints` argument,
+    mirroring `updateDiscussionTopic`, so it goes through the same GraphQL
+    mutation family the redesigned Discussions UI uses internally."""
+    spec_by_tag = {cp["tag"]: cp for cp in checkpoints_spec}
+    for tag in spec_by_tag:
+        if tag not in CHECKPOINT_LABELS:
+            raise CanvasError(f"unknown checkpoint tag {tag!r} (expected one of {CHECKPOINT_LABELS})")
+    missing = [tag for tag in CHECKPOINT_LABELS if tag not in spec_by_tag]
+    if missing:
+        raise CanvasError(f"creating a new checkpointed discussion needs both checkpoints given at once — missing {missing}")
+
+    gql_checkpoints = []
+    for tag in CHECKPOINT_LABELS:
+        spec = spec_by_tag[tag]
+        points = spec.get("points_possible")
+        due_at = spec.get("due_at")
+        if points is None or due_at is None:
+            raise CanvasError(f"checkpoint {tag!r}: points_possible and due_at are both required to create a new checkpointed discussion")
+        entry = {
+            "checkpointLabel": tag,
+            "pointsPossible": points,
+            "dates": [{"type": "everyone", "dueAt": due_at}],
+        }
+        if tag == "reply_to_entry":
+            entry["repliesRequired"] = spec.get("replies_required") or 1
+        gql_checkpoints.append(entry)
+
+    assignment_input = {"courseId": str(course_id), "name": name, "forCheckpoints": True}
+    if item.get("assignment_group_id") is not None:
+        assignment_input["assignmentGroupId"] = str(item["assignment_group_id"])
+    if item.get("unlock_at"):
+        assignment_input["unlockAt"] = item["unlock_at"]
+    if item.get("lock_at"):
+        assignment_input["lockAt"] = item["lock_at"]
+
+    input_ = {
+        "contextId": str(course_id),
+        "contextType": "Course",
+        "title": name,
+        "discussionType": "threaded",
+        "assignment": assignment_input,
+        "checkpoints": gql_checkpoints,
+    }
+    if item.get("description"):
+        input_["message"] = item["description"]
+    if item.get("published") is not None:
+        input_["published"] = item["published"]
+
+    result = c.graphql(_CREATE_CHECKPOINTED_DISCUSSION_MUTATION, {"input": input_})
+    errors = result.get("createDiscussionTopic", {}).get("errors")
+    if errors:
+        raise CanvasError(f"checkpointed discussion creation rejected: {errors}")
+    return int(result["createDiscussionTopic"]["discussionTopic"]["assignment"]["_id"])
+
+
 def _apply_rubric_association(c, course_id, assignment_id, rubric_title, rubrics, use_for_grading):
     matches = [r for r in rubrics if r["title"].strip().lower() == rubric_title.strip().lower()]
     if not matches:
@@ -179,11 +250,13 @@ def _remove_rubric_association(c, course_id, assignment_id):
     """Detach whatever rubric is on this assignment, freeing it up to attach a
     fresh one (e.g. after re-importing an edited rubric via `rubrics import`,
     since Canvas won't let you edit a rubric in place once it's used in
-    multiple places). Confirmed live: this does NOT delete the rubric itself
-    as long as it has a course-level "bookmark" association — which every
-    rubric this toolkit activates gets automatically (see rubrics.py), so
-    detaching a rubric built/activated through this tool is always safe even
-    when it's this assignment's only remaining usage."""
+    multiple places). CAUTION: if this is the rubric's last remaining usage
+    anywhere, Canvas can delete the rubric outright as a side effect of
+    detaching it — a course-level "bookmark" association was assumed to
+    reliably prevent that, but that assumption turned out to be wrong for at
+    least one real rubric (see rubrics.py / README). Use `rubrics update`
+    instead of this + a fresh `rubrics import` when the goal is editing an
+    existing rubric's content — it's designed around this exact failure mode."""
     result = c.graphql(_ASSIGNMENT_RUBRIC_ASSOCIATION_QUERY, {"assignmentId": str(assignment_id)})
     association = (result.get("assignment") or {}).get("rubricAssociation")
     if not association:
@@ -264,20 +337,21 @@ def cmd_assignments_apply(args, c):
             if args.dry_run:
                 print(f"[dry-run] would CREATE assignment: {name}")
                 if checkpoints_spec:
-                    print(f"[dry-run]   NOTE: checkpoint creation isn't supported — set up once in the Canvas UI first")
+                    print(f"[dry-run]   would CREATE as a checkpointed discussion: {[cp['tag'] for cp in checkpoints_spec]}")
                 if rubric_title:
                     print(f"[dry-run]   would ATTACH rubric: {rubric_title}")
                 continue
             if checkpoints_spec:
-                raise CanvasError(
-                    f"assignment {name!r} doesn't exist yet and checkpoint creation isn't supported — "
-                    "create it once via the Canvas UI (or course copy), then re-run to update dates"
-                )
-            created = c.post(f"courses/{args.course}/assignments", json=payload)
-            if args.verbose:
-                print(f"created: {name} (id={created['id']})")
+                created_id = _create_checkpointed_discussion(c, args.course, name, item, checkpoints_spec)
+                if args.verbose:
+                    print(f"created checkpointed discussion: {name} (id={created_id})")
+            else:
+                created = c.post(f"courses/{args.course}/assignments", json=payload)
+                created_id = created["id"]
+                if args.verbose:
+                    print(f"created: {name} (id={created_id})")
             if rubric_title:
-                _apply_rubric_association(c, args.course, created["id"], rubric_title, rubrics, item.get("use_rubric_for_grading", False))
+                _apply_rubric_association(c, args.course, created_id, rubric_title, rubrics, item.get("use_rubric_for_grading", False))
                 if args.verbose:
                     print(f"  rubric attached: {rubric_title}")
     progress.done()

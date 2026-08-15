@@ -36,7 +36,10 @@
 # item is updated; if not, it's created — EXCEPT modules and module items,
 # which are fully synced to match the file exactly, additions AND
 # removals (see the destructive-warning above and the modules: section
-# below); checkpoints are update-only (see the assignments: section).
+# below). Checkpointed discussions can be created OR updated (see the
+# assignments: section) — creating one goes through a different Canvas
+# GraphQL mutation than a normal assignment, confirmed via schema
+# introspection against a live instance, not just docs.
 #
 # Each section ends with a "Documented by Canvas, not wired into this
 # tool" list — real fields that exist, deliberately left out because
@@ -118,19 +121,28 @@ assignments:
       exclude_small_matches_value: 5
 
   # Checkpointed discussion (two due dates: initial post + required replies).
-  # This is UPDATE-ONLY — the checkpoint itself must already exist (set up
-  # once via the Canvas UI, or carried over by `canvas copy`). If the named
-  # assignment doesn't exist yet, `checkpoints` here raises an error instead
-  # of silently trying to create one.
-  - name: "Discussion: Introduction"              # REQUIRED — must already exist as a checkpointed discussion
+  # UPDATING one that already exists: any checkpoint field left out falls
+  # back to that checkpoint's current live value, same "blank means don't
+  # touch" convention as everything else.
+  - name: "Discussion: Introduction"              # REQUIRED — matches an existing checkpointed discussion, or names a new one to create
     checkpoints:                                  # optional block; if given, needs at least one of the two tags below
       - tag: reply_to_topic                       # REQUIRED (per checkpoint) — the initial post; must be reply_to_topic or reply_to_entry
-        points_possible: 14                       # optional — falls back to the checkpoint's current live value if omitted
-        due_at: "2026-08-22T04:59:59Z"            # optional — same fallback; REQUIRED in effect if the checkpoint has no due date yet
+        points_possible: 14                       # optional on update (falls back to the checkpoint's current live value) — REQUIRED on create
+        due_at: "2026-08-22T04:59:59Z"            # optional on update, same fallback — REQUIRED on create
       - tag: reply_to_entry                       # REQUIRED (per checkpoint) — the required replies
-        points_possible: 6                        # optional, see above
-        due_at: "2026-08-24T04:59:59Z"            # optional, see above
-        replies_required: 3                       # optional (reply_to_entry only) — falls back to the current live value if omitted
+        points_possible: 6                        # optional on update, see above — REQUIRED on create
+        due_at: "2026-08-24T04:59:59Z"            # optional on update, see above — REQUIRED on create
+        replies_required: 3                       # optional — falls back to the current live value on update, or defaults to 1 on create
+
+  # CREATING a brand-new checkpointed discussion (the name doesn't match
+  # anything existing yet): unlike an update, BOTH checkpoints above must be
+  # given at once, in full — there's no live checkpoint yet to fall back to,
+  # so points_possible and due_at are required on each one. description,
+  # assignment_group, published, unlock_at, and lock_at on the entry (same
+  # fields as any other assignment, see above) all apply normally to the new
+  # discussion; due_at/submission_types on the entry itself are ignored —
+  # the parent discussion's own due date always stays null, same as an
+  # existing checkpointed discussion.
 
   # Group assignment — one submission/grade per group instead of per student.
   - name: "Group Project: Case Study"             # REQUIRED
