@@ -2,7 +2,7 @@
 #
 # Every group named here is re-checked against Canvas itself (not a local
 # export) before anything happens. If a group still has assignments in it,
-# you must say what to do with them — pick exactly one:
+# something has to say what happens to them — pick at most one:
 #   - move_assignments_to: <existing group name>   moves them out first,
 #                                                    then deletes the (now
 #                                                    empty) group
@@ -10,7 +10,11 @@
 #                                                    the group — permanent,
 #                                                    and asks for a second,
 #                                                    separate confirmation
-# A group with no assignments in it needs neither field.
+# A group with no assignments in it needs neither field. Leaving BOTH out
+# for a group that still has assignments isn't an error — on a real run
+# you're asked interactively (move / delete / skip this group), picking
+# the target from a numbered list rather than typing a name; --dry-run
+# just flags it as UNRESOLVED and previews the rest of the file.
 #
 # Always run with --dry-run first. The real run still asks for an explicit
 # "yes" (and a second "yes" if any assignment deletion is involved) before

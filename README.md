@@ -221,12 +221,21 @@ python3 -m canvas_tools.cli assignment_groups delete --course 10001 --file my_gr
 Every group named in the file is checked against Canvas itself — freshly
 fetched, not a local export — before anything happens, so a stale file or a
 typo'd name fails loudly instead of silently doing nothing. If a group
-still has assignments in it, the file must say what happens to them:
-`move_assignments_to: <other group name>` relocates them first, or
-`delete_assignments: true` deletes them along with the group. Leaving both
-out for a non-empty group is an error, not a default — Canvas itself
-deletes a group's assignments if you don't tell it to move them elsewhere,
-so this tool refuses to guess.
+still has assignments in it, something has to say what happens to them —
+Canvas itself deletes a group's assignments if you don't tell it to move
+them elsewhere, so this tool refuses to guess. Setting both
+`move_assignments_to` and `delete_assignments: true` on the same entry is
+always a file error, regardless of `--dry-run`.
+
+Leaving **both** out for a non-empty group isn't a file error, though —
+it's resolved differently depending on how you're running it:
+- **Real run:** asked right there at the terminal — move to another group
+  (picked from a numbered list of the course's other groups, not typed by
+  hand), delete the assignments along with the group, or skip this one
+  group and leave it alone.
+- **`--dry-run`:** nothing to ask, since dry-run never touches the
+  keyboard — it prints an `UNRESOLVED` note for that group and leaves it
+  out of the previewed plan, rather than failing the whole preview.
 
 **Two separate confirmations, not --dry-run gated.** Even without
 `--dry-run`, the real run always prints the full plan and requires typing

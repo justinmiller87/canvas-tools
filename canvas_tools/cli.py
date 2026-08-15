@@ -397,6 +397,39 @@ def _delete_flow(args, c, kind, key_field, id_field, list_path, find_fn, list_pa
     return matches
 
 
+def _resolve_group_assignments_interactively(existing_groups, group_id, group_name, group_assignments):
+    """Called on a real (non-dry-run) `assignment_groups delete` when a
+    group's file entry didn't already say move_assignments_to/
+    delete_assignments — asks right at the terminal instead of erroring,
+    since forcing an edit-the-file round trip for something this small is
+    needless friction. Returns ("move", target_group), ("delete", None), or
+    ("skip", None) — skip leaves this one group alone and out of the plan
+    entirely, it isn't a stand-in for "delete the group but not the
+    assignments" (Canvas itself doesn't offer that)."""
+    names = ", ".join(a["name"] for a in group_assignments)
+    print(f"\n{group_name!r} still has {len(group_assignments)} assignment(s) in it: {names}")
+    candidates = [g for g in existing_groups if g["id"] != group_id]
+    while True:
+        choice = input("Move them to another group [m], delete them with the group [d], or skip this group [s]? ").strip().lower()
+        if choice in ("m", "move"):
+            if not candidates:
+                print("No other assignment groups exist in this course to move them to.")
+                continue
+            print("Move to which group?")
+            for i, g in enumerate(candidates, 1):
+                print(f"  [{i}] {g['name']}")
+            selection = input(f"Choose 1-{len(candidates)}: ").strip()
+            if not selection.isdigit() or not (1 <= int(selection) <= len(candidates)):
+                print("Not a valid choice — try again.")
+                continue
+            return "move", candidates[int(selection) - 1]
+        if choice in ("d", "delete"):
+            return "delete", None
+        if choice in ("s", "skip"):
+            return "skip", None
+        print("Please enter m, d, or s.")
+
+
 def cmd_assignment_groups_delete(args, c):
     with open(args.file) as f:
         spec = yaml.safe_load(f)
@@ -412,9 +445,14 @@ def cmd_assignment_groups_delete(args, c):
     existing_groups = c.get(f"courses/{args.course}/assignment_groups", params={"per_page": 100})
     existing_assignments = c.get(f"courses/{args.course}/assignments", params={"per_page": 100})
 
-    # Resolve every group (and move target) up front, so a typo'd name or an
-    # ambiguous/missing choice for a non-empty group fails loudly before
-    # anything is touched — in --dry-run and for real alike.
+    # Resolve every group (and move target) up front, so a typo'd name, or a
+    # file that sets both move_assignments_to AND delete_assignments on the
+    # same entry, fails loudly before anything is touched — in --dry-run
+    # and for real alike. A non-empty group with *neither* set isn't a
+    # file error, though: on a real run it's resolved interactively right
+    # here (see _resolve_group_assignments_interactively); --dry-run has
+    # nothing to ask, so it just flags the group as unresolved and leaves
+    # it out of the previewed plan.
     plan = []
     for entry in items:
         name = entry["name"] if isinstance(entry, dict) else entry
@@ -437,14 +475,28 @@ def cmd_assignment_groups_delete(args, c):
             if target["id"] == group["id"]:
                 raise CanvasError(f"assignment group {name!r}: move_assignments_to can't be the same group")
         elif group_assignments and not delete_assignments:
-            names = ", ".join(a["name"] for a in group_assignments)
-            raise CanvasError(
-                f"assignment group {name!r} still has {len(group_assignments)} assignment(s) in it "
-                f"({names}) — add `move_assignments_to: <other group name>` to relocate them first, "
-                f"or `delete_assignments: true` to delete them along with the group"
-            )
+            if args.dry_run:
+                names = ", ".join(a["name"] for a in group_assignments)
+                print(
+                    f"[dry-run] UNRESOLVED: assignment group {name!r} has {len(group_assignments)} assignment(s) "
+                    f"({names}) and no move_assignments_to/delete_assignments in the file — will ask what to do "
+                    f"with them on a real run."
+                )
+                continue
+            action, chosen_target = _resolve_group_assignments_interactively(existing_groups, group["id"], name, group_assignments)
+            if action == "skip":
+                print(f"skipping (left alone): {name}")
+                continue
+            elif action == "move":
+                target = chosen_target
+            else:
+                delete_assignments = True
 
         plan.append({"group": group, "assignments": group_assignments, "target": target, "delete_assignments": delete_assignments})
+
+    if not plan:
+        print("Nothing left to delete after resolving choices.")
+        return
 
     wipes_everything = bool(existing_groups) and len(plan) == len(existing_groups)
 
