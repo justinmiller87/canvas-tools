@@ -114,12 +114,14 @@ go whenever.
 
 Pulls a live course's rubrics, assignment groups, assignments, pages,
 announcements, and modules and writes them out as `rubrics/<title>.csv`
-(one file per rubric) / `assignment_groups.yaml` / `assignments.yaml` /
-`pages.yaml` / `announcements.yaml` / `modules.yaml` in the same schema
-their respective `apply`/`import`/`update` commands expect. Useful for
-seeing how a real built course maps to these tools, or as a starting
-template for a new course. The YAML files round-trip: applying them back
-to their source course is a no-op. The rubric CSVs round-trip through
+(one file per rubric) plus, for every other resource, **both**
+`assignment_groups.yaml`/`.json`, `assignments.yaml`/`.json`,
+`pages.yaml`/`.json`, `announcements.yaml`/`.json`, and
+`modules.yaml`/`.json` — in the same schema their respective
+`apply`/`import`/`update` commands expect. Useful for seeing how a real
+built course maps to these tools, or as a starting template for a new
+course. The files round-trip: applying either format back to their source
+course is a no-op. The rubric CSVs round-trip through
 `rubrics update`, not `rubrics import` — re-importing one would create a
 new rubric (or an auto-renamed one, see above) rather than updating the
 original; they're exported for reference, for editing via `rubrics
@@ -131,6 +133,7 @@ python3 -m canvas_tools.export_course --course 10001 10002 10003 --out exports
 python3 -m canvas_tools.export_course --all --out exports
 python3 -m canvas_tools.export_course --all --match "26/FA" --out exports
 python3 -m canvas_tools.export_course --course 10001 --out exports --format json
+python3 -m canvas_tools.export_course --course 10001 --out exports --format yaml
 ```
 
 `--course` takes one or more course IDs — each gets exported in turn, its
@@ -165,22 +168,28 @@ still lands in the right place instead of creating a stray nested
 explicitly and it resolves normally, relative to wherever you actually
 are, same as `--file` always has.
 
-`--format json` writes `.json` files instead of `.yaml` (rubrics stay CSV
-either way — that format is dictated by Canvas's own rubric import
-endpoint, not a style choice). Every `apply` command already reads either
-format with no changes needed — YAML is a syntactic superset of JSON, so
-`yaml.safe_load()` parses a plain JSON file correctly (confirmed directly,
-not assumed) — so a hand-written `.json` file works today even without
-`--format json`. The one thing JSON loses: no comments, and multi-line
-HTML shows up as one line with escaped `\n`s instead of YAML's readable
-block-literal style, which matters more the more you're hand-editing
-descriptions/bodies. `assignments export`/`pages export`/etc. (below) also
-switch to JSON if you give them an `--out` path ending in `.json`.
+**Left out, `--format` writes both `.yaml` and `.json` for every
+resource** — one fetch from Canvas, two files each, so you always have
+both on disk without re-running the export. Give `--format yaml` or
+`--format json` to write only that one instead (rubrics stay CSV either
+way regardless of `--format` — that format is dictated by Canvas's own
+rubric import endpoint, not a style choice). Every `apply` command already
+reads either format with no changes needed — YAML is a syntactic superset
+of JSON, so `yaml.safe_load()` parses a plain JSON file correctly
+(confirmed directly, not assumed) — so a hand-written `.json` file works
+today even without ever running `--format json`. The one thing JSON
+loses: no comments, and multi-line HTML shows up as one line with escaped
+`\n`s instead of YAML's readable block-literal style, which matters more
+the more you're hand-editing descriptions/bodies. `assignments
+export`/`pages export`/etc. (below) don't have a `--format` flag at all —
+they always write exactly one file, in whatever format its `--out` path's
+extension says.
 
 **This overwrites every local file for the course with whatever is
-currently live in Canvas** — assignment_groups.yaml, assignments.yaml,
-pages.yaml, announcements.yaml, modules.yaml, and the rubric CSVs all get
-replaced in one pass. If you have local edits in any of those files that
+currently live in Canvas** — assignment_groups.yaml/.json,
+assignments.yaml/.json, pages.yaml/.json, announcements.yaml/.json,
+modules.yaml/.json, and the rubric CSVs all get replaced in one pass. If
+you have local edits in any of those files that
 haven't been pushed to Canvas yet (`apply`'d) or committed, running this
 discards them silently — confirmed the hard way earlier in this project's
 history. Push or commit pending edits _before_ pulling a fresh export, not

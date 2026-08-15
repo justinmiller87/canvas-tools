@@ -240,8 +240,11 @@ def _course_folder_name(course_id, course_code):
     return f"course_{course_id}_{safe_code}" if safe_code else f"course_{course_id}"
 
 
-def export_one_course(c, course_id, out_parent, verbose=False, fmt="yaml"):
-    ext = "json" if fmt == "json" else "yaml"
+def _ext(fmt):
+    return "json" if fmt == "json" else "yaml"
+
+
+def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",)):
     course_code = c.get(f"courses/{course_id}").get("course_code")
     out = os.path.join(out_parent, _course_folder_name(course_id, course_code))
     os.makedirs(out, exist_ok=True)
@@ -256,50 +259,48 @@ def export_one_course(c, course_id, out_parent, verbose=False, fmt="yaml"):
     print(f"wrote {len(rubric_files)} rubrics -> {rubrics_dir}/")
 
     assignment_groups = export_assignment_groups(c, course_id)
-    dump_data(
-        assignment_groups,
-        os.path.join(out, f"assignment_groups.{ext}"),
-        header_comment=f"# Exported from course {course_id} — schema matches `canvas assignment_groups apply`\n",
-    )
-    print(f"wrote {len(assignment_groups['assignment_groups'])} assignment groups -> {out}/assignment_groups.{ext}")
+    for fmt in formats:
+        path = os.path.join(out, f"assignment_groups.{_ext(fmt)}")
+        dump_data(
+            assignment_groups, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas assignment_groups apply`\n"
+        )
+        print(f"wrote {len(assignment_groups['assignment_groups'])} assignment groups -> {path}")
 
     assignments = export_assignments(c, course_id)
-    dump_data(
-        assignments,
-        os.path.join(out, f"assignments.{ext}"),
-        header_comment=f"# Exported from course {course_id} — schema matches `canvas assignments apply`\n",
-    )
-    print(f"wrote {len(assignments['assignments'])} assignments -> {out}/assignments.{ext}")
+    for fmt in formats:
+        path = os.path.join(out, f"assignments.{_ext(fmt)}")
+        dump_data(assignments, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas assignments apply`\n")
+        print(f"wrote {len(assignments['assignments'])} assignments -> {path}")
 
     pages = export_pages(c, course_id, verbose=verbose)
-    dump_data(
-        pages,
-        os.path.join(out, f"pages.{ext}"),
-        header_comment=f"# Exported from course {course_id} — schema matches `canvas pages apply`\n",
-    )
-    print(f"wrote {len(pages['pages'])} pages -> {out}/pages.{ext}")
+    for fmt in formats:
+        path = os.path.join(out, f"pages.{_ext(fmt)}")
+        dump_data(pages, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas pages apply`\n")
+        print(f"wrote {len(pages['pages'])} pages -> {path}")
 
     announcements = export_announcements(c, course_id)
-    dump_data(
-        announcements,
-        os.path.join(out, f"announcements.{ext}"),
-        header_comment=f"# Exported from course {course_id} — schema matches `canvas announcements apply`\n",
-    )
-    print(f"wrote {len(announcements['announcements'])} announcements -> {out}/announcements.{ext}")
+    for fmt in formats:
+        path = os.path.join(out, f"announcements.{_ext(fmt)}")
+        dump_data(
+            announcements, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas announcements apply`\n"
+        )
+        print(f"wrote {len(announcements['announcements'])} announcements -> {path}")
 
     modules = export_modules(c, course_id)
-    dump_data(
-        modules,
-        os.path.join(out, f"modules.{ext}"),
-        header_comment=(
-            f"# Exported from course {course_id} — schema matches `canvas modules apply`\n"
-            "# `modules apply` treats this file as the exact, complete set of modules and\n"
-            "# items — a module or item missing from this file gets DELETED from the course,\n"
-            "# not just left alone. Always --dry-run before applying an edited copy of this file.\n"
-        ),
-    )
     total_items = sum(len(m["items"]) for m in modules["modules"])
-    print(f"wrote {len(modules['modules'])} modules / {total_items} items -> {out}/modules.{ext}")
+    for fmt in formats:
+        path = os.path.join(out, f"modules.{_ext(fmt)}")
+        dump_data(
+            modules,
+            path,
+            header_comment=(
+                f"# Exported from course {course_id} — schema matches `canvas modules apply`\n"
+                "# `modules apply` treats this file as the exact, complete set of modules and\n"
+                "# items — a module or item missing from this file gets DELETED from the course,\n"
+                "# not just left alone. Always --dry-run before applying an edited copy of this file.\n"
+            ),
+        )
+        print(f"wrote {len(modules['modules'])} modules / {total_items} items -> {path}")
 
 
 def main():
@@ -327,9 +328,10 @@ def main():
     p.add_argument(
         "--format",
         choices=["yaml", "json"],
-        default="yaml",
-        help="Output format for the written files (default: yaml). JSON files work with every "
-        "`apply` command too, just without comments and without multi-line-friendly HTML.",
+        default=None,
+        help="Output format for the written files. Default: write both yaml and json for every "
+        "resource. Give this to write only one. JSON files work with every `apply` command too, "
+        "just without comments and without multi-line-friendly HTML.",
     )
     args = p.parse_args()
 
@@ -352,12 +354,14 @@ def main():
     else:
         course_ids = args.course
 
+    formats = [args.format] if args.format else ["yaml", "json"]
+
     failed = []
     for i, course_id in enumerate(course_ids):
         if len(course_ids) > 1:
             print(f"\n=== [{i + 1}/{len(course_ids)}] course {course_id} ===")
         try:
-            export_one_course(c, course_id, args.out, verbose=args.verbose, fmt=args.format)
+            export_one_course(c, course_id, args.out, verbose=args.verbose, formats=formats)
         except CanvasError as e:
             print(f"course {course_id}: ERROR — {e}")
             failed.append(course_id)
