@@ -1,0 +1,43 @@
+{
+  "modules": [
+    {
+      "name": "Week 1",
+      "published": true,
+      "unlock_at": "2026-08-17T05:00:00Z",
+      "items": [
+        {
+          "type": "SubHeader",
+          "title": "Getting Started"
+        },
+        {
+          "type": "Page",
+          "title": "Syllabus",
+          "page_url": "syllabus"
+        },
+        {
+          "type": "Assignment",
+          "title": "Homework 1: Intro"
+        },
+        {
+          "type": "ExternalUrl",
+          "title": "Course Intro Video",
+          "url": "https://example.com/intro-video"
+        }
+      ]
+    },
+    {
+      "name": "Week 2",
+      "published": true,
+      "unlock_at": "2026-08-24T05:00:00Z",
+      "prerequisites": [
+        "Week 1"
+      ],
+      "items": [
+        {
+          "type": "Assignment",
+          "title": "Homework 2: Loops"
+        }
+      ]
+    }
+  ]
+}

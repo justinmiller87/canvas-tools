@@ -1,0 +1,15 @@
+{
+  "announcements": [
+    {
+      "title": "Welcome to the course!",
+      "message": "<p>Check the syllabus and Week 1 module to get started.</p>",
+      "published": true
+    },
+    {
+      "title": "Midterm reminder",
+      "message": "<p>The midterm opens Monday and closes Friday at 11:59 PM.</p>",
+      "published": true,
+      "delayed_post_at": "2026-10-12T05:00:00Z"
+    }
+  ]
+}

@@ -102,6 +102,7 @@ python3 -m canvas_tools.export_course --course 10001 --out exports
 python3 -m canvas_tools.export_course --course 10001 10002 10003 --out exports
 python3 -m canvas_tools.export_course --all --out exports
 python3 -m canvas_tools.export_course --all --match "26/FA" --out exports
+python3 -m canvas_tools.export_course --course 10001 --out exports --format json
 ```
 
 `--course` takes one or more course IDs — each gets exported in turn, its
@@ -190,8 +191,9 @@ python3 -m canvas_tools.cli assignment_groups apply --course 10001 --file my_gro
 
 ### Bulk create/update assignments
 
-Define assignments in a YAML file (see `examples/assignments.example.yaml`,
-or `examples/master.example.yaml` for every field with REQUIRED/optional
+Define assignments in a YAML file (see `examples/assignments.example.yaml`
+— or `examples/assignments.example.json` for the same thing as JSON, above
+— or `examples/master.example.yaml` for every field with REQUIRED/optional
 notes). Any field accepted by the Canvas Assignments API can be used
 (`points_possible`, `due_at`, `description`, `submission_types`,
 `allowed_extensions`, `allowed_attempts`, `omit_from_final_grade`,
@@ -260,6 +262,26 @@ assignments:
 python3 -m canvas_tools.cli assignments apply --course 10001 --file my_one_fix.yaml
 ```
 
+The exact same fix as `my_one_fix.json` instead — same schema, same field
+names, just a different file format (see `--format json` above; unlike
+YAML, JSON has no comment syntax, so the filename can't be noted inline
+the way it is above):
+
+```json
+{
+  "assignments": [
+    {
+      "name": "Pre-Quiz: Chapter 3",
+      "points_possible": 20
+    }
+  ]
+}
+```
+
+```
+python3 -m canvas_tools.cli assignments apply --course 10001 --file my_one_fix.json
+```
+
 **Not supported: plagiarism review (e.g. Turnitin/Copyleaks/VeriCite).**
 Verified directly against a live assignment — this setting isn't in the
 Assignments API response at all, isn't in any form field, and doesn't
@@ -271,9 +293,9 @@ Set this one by hand in the Canvas UI.
 
 ### Create/update pages
 
-Define pages in a YAML file (see `examples/pages.example.yaml`). Matched
-by exact title (case-insensitive). `body` is raw HTML — write it directly
-or paste in content from elsewhere.
+Define pages in a YAML file (see `examples/pages.example.yaml`, or
+`examples/pages.example.json`). Matched by exact title (case-insensitive).
+`body` is raw HTML — write it directly or paste in content from elsewhere.
 
 ```
 python3 -m canvas_tools.cli pages apply --course 10001 --file my_pages.yaml --dry-run
@@ -286,9 +308,11 @@ pages themselves.
 
 ### Create/update announcements
 
-Define announcements in a YAML file (see `examples/announcements.example.yaml`).
-Matched by exact title (case-insensitive). Set `delayed_post_at` to schedule
-one for later instead of posting immediately.
+Define announcements in a YAML file (see
+`examples/announcements.example.yaml`, or
+`examples/announcements.example.json`). Matched by exact title
+(case-insensitive). Set `delayed_post_at` to schedule one for later
+instead of posting immediately.
 
 ```
 python3 -m canvas_tools.cli announcements apply --course 10001 --file my_announcements.yaml --dry-run
@@ -328,7 +352,8 @@ This is the opposite of `assignments`/`pages`/`announcements` apply, which
 never delete anything regardless of what's left out of the file.
 
 Define modules and their items in a YAML file (see
-`examples/modules.example.yaml`). Modules are matched/created by name;
+`examples/modules.example.yaml`, or `examples/modules.example.json`).
+Modules are matched/created by name;
 items are matched by title — already-present ones are left alone, missing
 ones are added, and (per the above) extra ones not listed are removed.
 Supported item types: `ExternalUrl`, `SubHeader`, `Page`, `Assignment`,
