@@ -11,16 +11,26 @@ import yaml
 from canvas_tools.client import CanvasClient, CanvasError
 from canvas_tools.html_clean import clean_html
 from canvas_tools.rubrics import export_rubrics_csv, import_rubrics_csv, update_rubric_in_place, _parse_rubrics_csv
-from canvas_tools.export_course import export_assignment_groups, export_assignments, export_pages, export_announcements, export_modules, dump_data
+from canvas_tools.export_course import (
+    export_assignment_groups,
+    export_assignments,
+    export_pages,
+    export_announcements,
+    export_modules,
+    dump_data,
+    write_with_confirmation,
+    write_text_with_confirmation,
+    _archive_existing,
+)
 from canvas_tools.progress import Progress
 
 
 def _write_single_yaml_export(args, c, export_fn, key, apply_cmd_name, **kwargs):
     data = export_fn(c, args.course, **kwargs)
-    dump_data(
+    if write_with_confirmation(
         data, args.out, header_comment=f"# Exported from course {args.course} — schema matches `canvas {apply_cmd_name} apply`\n"
-    )
-    print(f"wrote {len(data[key])} {key} -> {args.out}")
+    ):
+        print(f"wrote {len(data[key])} {key} -> {args.out}")
 
 
 def cmd_assignment_groups_export(args, c):
@@ -41,7 +51,7 @@ def cmd_announcements_export(args, c):
 
 def cmd_modules_export(args, c):
     data = export_modules(c, args.course)
-    dump_data(
+    if write_with_confirmation(
         data,
         args.out,
         header_comment=(
@@ -50,9 +60,9 @@ def cmd_modules_export(args, c):
             "# items — a module or item missing from this file gets DELETED from the course,\n"
             "# not just left alone. Always --dry-run before applying an edited copy of this file.\n"
         ),
-    )
-    total_items = sum(len(m["items"]) for m in data["modules"])
-    print(f"wrote {len(data['modules'])} modules / {total_items} items -> {args.out}")
+    ):
+        total_items = sum(len(m["items"]) for m in data["modules"])
+        print(f"wrote {len(data['modules'])} modules / {total_items} items -> {args.out}")
 
 
 def cmd_courses_list(args, c):
@@ -306,23 +316,50 @@ def _conventional_export_path(file_path, kind):
 def _offer_resync(args, c, export_fn, kind, **export_kwargs):
     """After a real (non-dry-run) apply or delete completes, offer to
     immediately re-export Canvas's live state back to the course's
-    conventional file for this resource type — the same file/directory
+    conventional file(s) for this resource type — the same file/directory
     `{kind} export` would normally write, regardless of what --file was
     actually named. Without this, that file silently drifts out of sync
     with anything changed outside it (directly in the Canvas UI, or by a
     separate `apply`/`delete` run) — and a later `apply` against the stale
     copy can undo those changes, e.g. by recreating something already
-    deleted. Purely a convenience prompt: anything but y/yes leaves it
-    untouched."""
+    deleted. Purely a convenience prompt: anything but y/yes/a/archive
+    leaves every target untouched.
+
+    If both a .yaml and a .json copy already exist alongside --file, both
+    get resynced together under one shared decision (editing one format by
+    hand and letting the other silently drift is exactly the kind of
+    inconsistency this whole prompt exists to prevent). If only one of the
+    two exists, only that one is touched — this never starts a second
+    format that was never in use. If neither exists yet, defaults to
+    creating a fresh .yaml, same as every other export in this tool."""
     if args.dry_run:
         return
-    target = _conventional_export_path(args.file, kind)
-    reply = input(f"\nRe-export course {args.course}'s current state to {target!r}? [y/N]: ").strip().lower()
-    if reply not in ("y", "yes"):
-        return
+    directory = os.path.dirname(args.file)
+    yaml_target = os.path.join(directory, f"{kind}.yaml")
+    json_target = os.path.join(directory, f"{kind}.json")
+    existing_targets = [p for p in (yaml_target, json_target) if os.path.exists(p)]
+    targets = existing_targets or [yaml_target]
+
+    if existing_targets:
+        names = " and ".join(repr(p) for p in targets)
+        reply = input(f"\nRe-export course {args.course}'s current state to {names}? [Y]es/[N]o/[A]rchive: ").strip().lower()
+        while reply not in ("y", "yes", "n", "no", "a", "archive"):
+            reply = input("Please answer Y, N, or A: ").strip().lower()
+        if reply in ("n", "no"):
+            return
+        archive = reply in ("a", "archive")
+    else:
+        reply = input(f"\nRe-export course {args.course}'s current state to {targets[0]!r}? [y/N]: ").strip().lower()
+        if reply not in ("y", "yes"):
+            return
+        archive = False
     data = export_fn(c, args.course, **export_kwargs)
-    dump_data(data, target, header_comment=f"# Exported from course {args.course} — schema matches `canvas {kind} apply`\n")
-    print(f"wrote {len(data[kind])} {kind} -> {target}")
+    for target in targets:
+        if archive and os.path.exists(target):
+            archived = _archive_existing(target)
+            print(f"archived old copy -> {archived!r}")
+        dump_data(data, target, header_comment=f"# Exported from course {args.course} — schema matches `canvas {kind} apply`\n")
+        print(f"wrote {len(data[kind])} {kind} -> {target}")
 
 
 def cmd_assignment_groups_apply(args, c):
@@ -1179,10 +1216,11 @@ def cmd_copy(args, c):
 def cmd_rubrics_export(args, c):
     files = export_rubrics_csv(c, args.course, verbose=args.verbose)
     os.makedirs(args.out, exist_ok=True)
+    written = 0
     for filename, csv_text in files:
-        with open(os.path.join(args.out, filename), "w", newline="") as f:
-            f.write(csv_text)
-    print(f"wrote {len(files)} rubric(s) -> {args.out}/")
+        if write_text_with_confirmation(os.path.join(args.out, filename), csv_text, newline=""):
+            written += 1
+    print(f"wrote {written} rubric(s) -> {args.out}/")
 
 
 def cmd_rubrics_import(args, c):

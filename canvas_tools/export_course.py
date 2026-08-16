@@ -5,7 +5,9 @@ built course can be inspected (or reused as a template) locally.
 """
 import argparse
 import json
+import locale
 import os
+from datetime import datetime
 
 import yaml
 
@@ -75,6 +77,87 @@ def dump_data(data, path, header_comment=None):
             if header_comment:
                 f.write(header_comment)
             yaml.dump(data, f, sort_keys=False, allow_unicode=True, width=100)
+
+
+def _local_date_order():
+    """'DM' if the current user's locale conventionally writes a numeric date
+    day-before-month (e.g. 31/12/2026), 'MD' otherwise — also the fallback
+    when the locale can't be read (nl_langinfo isn't available on every
+    platform, and a locale may not be fully configured in the shell this
+    runs from)."""
+    try:
+        locale.setlocale(locale.LC_TIME, "")
+        fmt = locale.nl_langinfo(locale.D_FMT)
+    except (AttributeError, locale.Error, ValueError):
+        return "MD"
+    d_pos, m_pos = fmt.find("%d"), fmt.find("%m")
+    if d_pos == -1 or m_pos == -1:
+        return "MD"
+    return "DM" if d_pos < m_pos else "MD"
+
+
+def _archive_timestamp():
+    pattern = "%Y-%d-%m_%H-%M-%S" if _local_date_order() == "DM" else "%Y-%m-%d_%H-%M-%S"
+    return datetime.now().strftime(pattern)
+
+
+def _archive_existing(path):
+    """Move an existing file into an `archive/` subfolder next to it,
+    renamed with a local timestamp, so `write_with_confirmation`'s "archive"
+    choice never just silently clobbers the old copy."""
+    directory = os.path.dirname(path) or "."
+    archive_dir = os.path.join(directory, "archive")
+    os.makedirs(archive_dir, exist_ok=True)
+    base, ext = os.path.splitext(os.path.basename(path))
+    archived_path = os.path.join(archive_dir, f"{base}_{_archive_timestamp()}{ext}")
+    os.rename(path, archived_path)
+    return archived_path
+
+
+def _prompt_overwrite(path):
+    reply = input(f"{path!r} already exists. [Y]es/[N]o/[A]rchive: ").strip().lower()
+    while reply not in ("y", "yes", "n", "no", "a", "archive"):
+        reply = input("Please answer Y, N, or A: ").strip().lower()
+    return reply
+
+
+def _resolve_write_decision(path):
+    """Shared no-blind-overwrite gate for a single file: prompts (and
+    archives, if asked) when `path` already exists, before the caller does
+    the actual write. Returns 'write' or 'skip'."""
+    if not os.path.exists(path):
+        return "write"
+    reply = _prompt_overwrite(path)
+    if reply in ("n", "no"):
+        print(f"skipped {path!r}")
+        return "skip"
+    if reply in ("a", "archive"):
+        archived = _archive_existing(path)
+        print(f"archived old copy -> {archived!r}")
+    return "write"
+
+
+def write_with_confirmation(data, path, header_comment=None):
+    """`dump_data`, but never a blind overwrite: if `path` already exists,
+    ask whether to overwrite it in place, skip it entirely, or archive the
+    old copy first (see `_archive_existing`). Returns False if the file was
+    left untouched (the user chose to skip it), True otherwise."""
+    if _resolve_write_decision(path) == "skip":
+        return False
+    dump_data(data, path, header_comment=header_comment)
+    return True
+
+
+def write_text_with_confirmation(path, text, newline=None):
+    """Same no-blind-overwrite protection as `write_with_confirmation`, for
+    plain-text output (e.g. rubric CSVs) that doesn't go through
+    `dump_data`. Returns False if the file was left untouched, True
+    otherwise."""
+    if _resolve_write_decision(path) == "skip":
+        return False
+    with open(path, "w", newline=newline) as f:
+        f.write(text)
+    return True
 
 
 def export_assignment_groups(c, course_id):
@@ -268,44 +351,47 @@ def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",)
     rubric_files = export_rubrics_csv(c, course_id, verbose=verbose)
     rubrics_dir = os.path.join(out, "rubrics")
     os.makedirs(rubrics_dir, exist_ok=True)
+    written = 0
     for filename, csv_text in rubric_files:
-        with open(os.path.join(rubrics_dir, filename), "w", newline="") as f:
-            f.write(csv_text)
-    print(f"wrote {len(rubric_files)} rubrics -> {rubrics_dir}/")
+        if write_text_with_confirmation(os.path.join(rubrics_dir, filename), csv_text, newline=""):
+            written += 1
+    print(f"wrote {written} rubrics -> {rubrics_dir}/")
 
     assignment_groups = export_assignment_groups(c, course_id)
     for fmt in formats:
         path = os.path.join(out, f"assignment_groups.{_ext(fmt)}")
-        dump_data(
+        if write_with_confirmation(
             assignment_groups, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas assignment_groups apply`\n"
-        )
-        print(f"wrote {len(assignment_groups['assignment_groups'])} assignment groups -> {path}")
+        ):
+            print(f"wrote {len(assignment_groups['assignment_groups'])} assignment groups -> {path}")
 
     assignments = export_assignments(c, course_id)
     for fmt in formats:
         path = os.path.join(out, f"assignments.{_ext(fmt)}")
-        dump_data(assignments, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas assignments apply`\n")
-        print(f"wrote {len(assignments['assignments'])} assignments -> {path}")
+        if write_with_confirmation(
+            assignments, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas assignments apply`\n"
+        ):
+            print(f"wrote {len(assignments['assignments'])} assignments -> {path}")
 
     pages = export_pages(c, course_id, verbose=verbose)
     for fmt in formats:
         path = os.path.join(out, f"pages.{_ext(fmt)}")
-        dump_data(pages, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas pages apply`\n")
-        print(f"wrote {len(pages['pages'])} pages -> {path}")
+        if write_with_confirmation(pages, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas pages apply`\n"):
+            print(f"wrote {len(pages['pages'])} pages -> {path}")
 
     announcements = export_announcements(c, course_id)
     for fmt in formats:
         path = os.path.join(out, f"announcements.{_ext(fmt)}")
-        dump_data(
+        if write_with_confirmation(
             announcements, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas announcements apply`\n"
-        )
-        print(f"wrote {len(announcements['announcements'])} announcements -> {path}")
+        ):
+            print(f"wrote {len(announcements['announcements'])} announcements -> {path}")
 
     modules = export_modules(c, course_id)
     total_items = sum(len(m["items"]) for m in modules["modules"])
     for fmt in formats:
         path = os.path.join(out, f"modules.{_ext(fmt)}")
-        dump_data(
+        if write_with_confirmation(
             modules,
             path,
             header_comment=(
@@ -314,8 +400,8 @@ def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",)
                 "# items — a module or item missing from this file gets DELETED from the course,\n"
                 "# not just left alone. Always --dry-run before applying an edited copy of this file.\n"
             ),
-        )
-        print(f"wrote {len(modules['modules'])} modules / {total_items} items -> {path}")
+        ):
+            print(f"wrote {len(modules['modules'])} modules / {total_items} items -> {path}")
 
 
 def main():

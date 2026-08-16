@@ -59,29 +59,54 @@ Prints `id  course_code  name` — grab the ID for use in other commands.
 
 Every `apply` and `delete` command — for every resource type — ends by
 offering to immediately re-export Canvas's live state back to the
-course's conventional file for that resource:
+course's conventional file(s) for that resource:
 
 ```
-Re-export course 10001's current state to 'exports/course_10001_.../assignments.yaml'? [y/N]:
+Re-export course 10001's current state to 'exports/course_10001_.../assignments.yaml' and 'exports/course_10001_.../assignments.json'? [Y]es/[N]o/[A]rchive:
 ```
 
-That target is always the file `{kind} export` would normally write —
-`assignments.yaml`, `assignment_groups.yaml`, `pages.yaml`,
-`announcements.yaml`, or `modules.yaml` — in whatever directory `--file`
-lives in, matching its format (`.yaml` vs `.json`). It's deliberately
-**not** just whatever `--file` happened to be named: applying from a
-scratch/edit copy like `assignments_new.yaml` still resyncs the course's
-real `assignments.yaml`, exactly as if you'd run `assignments export`
-right after — not the scratch file itself. Answering `n` (or anything
-else) leaves that file untouched, and `--dry-run` never asks at all,
-since nothing changed to sync.
+The target is always the file(s) `{kind} export` would normally write —
+`assignments.yaml`/`.json`, `assignment_groups.yaml`/`.json`,
+`pages.yaml`/`.json`, `announcements.yaml`/`.json`, or
+`modules.yaml`/`.json` — in whatever directory `--file` lives in. It's
+deliberately **not** just whatever `--file` happened to be named: applying
+from a scratch/edit copy like `assignments_new.yaml` still resyncs the
+course's real `assignments.yaml`, exactly as if you'd run `assignments
+export` right after — not the scratch file itself.
+
+If **both** the `.yaml` and `.json` copy already exist alongside `--file`,
+one shared decision resyncs both together — editing one format by hand and
+letting the other silently drift is exactly the inconsistency this exists
+to prevent. If only one of the two exists, only that one is touched; this
+never starts a second format that was never in use. If neither exists yet,
+it falls back to a plain `[y/N]` prompt and creates a fresh `.yaml`, same
+as every other export in this tool.
+
+`--dry-run` never asks at all, since nothing changed to sync. Otherwise,
+answering the prompt means:
+
+- **Y**es — overwrite the file(s) in place.
+- **N**o (or anything else) — leave every target untouched.
+- **A**rchive — move the existing file(s) into an `archive/` subfolder next
+  to them first (created if it doesn't exist yet), renamed with a
+  timestamp reflecting your own locale's date order (e.g.
+  `modules_2026-08-16_14-30-05.yaml`, or day-before-month for a locale that
+  conventionally writes dates that way) — then write the fresh export in
+  their place.
 
 This exists because that file can silently drift out of sync with
 anything changed outside it — directly in the Canvas UI, or by a separate
 `apply`/`delete` run — and a later `apply` against the stale copy can undo
 those changes, e.g. by recreating something that was just deleted.
-Answering `y` closes that gap immediately instead of relying on a manual
-`export` afterward.
+Answering `y` (or `a`) closes that gap immediately instead of relying on a
+manual `export` afterward, without silently clobbering whatever was there
+before if you'd rather keep it.
+
+This same **no-blind-overwrites** protection — the `[Y]es/[N]o/[A]rchive`
+prompt, only asked when the target file already exists — applies to every
+`export` command (`assignments export --out ...`, `modules export`, etc.)
+and to a full `export_course` run as well, one prompt per file it's about
+to write over.
 
 ### Order of operations, when creating new content
 
@@ -126,6 +151,10 @@ course is a no-op. The rubric CSVs round-trip through
 new rubric (or an auto-renamed one, see above) rather than updating the
 original; they're exported for reference, for editing via `rubrics
 update`, or to import fresh into a _different_ course.
+
+The no-blind-overwrites `[Y]es/[N]o/[A]rchive` prompt (see above) applies
+to every file this writes, rubric CSVs included — one prompt per file,
+same as `rubrics export`.
 
 ```
 python3 -m canvas_tools.export_course --course 10001 --out exports
