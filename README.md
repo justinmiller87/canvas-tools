@@ -55,86 +55,6 @@ python3 -m canvas_tools.cli courses list --state unpublished
 
 Prints `id  course_code  name` — grab the ID for use in other commands.
 
-### Keeping local files in sync after apply/delete
-
-Every `apply` and `delete` command — for every resource type — ends by
-offering to immediately re-export Canvas's live state back to the
-course's conventional file(s) for that resource:
-
-```
-Re-export course 10001's current state to 'exports/course_10001_.../assignments.yaml' and 'exports/course_10001_.../assignments.json'? [Y]es/[N]o/[A]rchive:
-```
-
-The target is always the file(s) `{kind} export` would normally write —
-`assignments.yaml`/`.json`, `assignment_groups.yaml`/`.json`,
-`pages.yaml`/`.json`, `announcements.yaml`/`.json`, or
-`modules.yaml`/`.json` — in whatever directory `--file` lives in. It's
-deliberately **not** just whatever `--file` happened to be named: applying
-from a scratch/edit copy like `assignments_new.yaml` still resyncs the
-course's real `assignments.yaml`, exactly as if you'd run `assignments
-export` right after — not the scratch file itself.
-
-If **both** the `.yaml` and `.json` copy already exist alongside `--file`,
-one shared decision resyncs both together — editing one format by hand and
-letting the other silently drift is exactly the inconsistency this exists
-to prevent. If only one of the two exists, only that one is touched; this
-never starts a second format that was never in use. If neither exists yet,
-it falls back to a plain `[y/N]` prompt and creates a fresh `.yaml`, same
-as every other export in this tool.
-
-`--dry-run` never asks at all, since nothing changed to sync. Otherwise,
-answering the prompt means:
-
-- **Y**es — overwrite the file(s) in place.
-- **N**o (or anything else) — leave every target untouched.
-- **A**rchive — move the existing file(s) into an `archive/` subfolder next
-  to them first (created if it doesn't exist yet), renamed with a
-  timestamp reflecting your own locale's date order (e.g.
-  `modules_2026-08-16_14-30-05.yaml`, or day-before-month for a locale that
-  conventionally writes dates that way) — then write the fresh export in
-  their place.
-
-This exists because that file can silently drift out of sync with
-anything changed outside it — directly in the Canvas UI, or by a separate
-`apply`/`delete` run — and a later `apply` against the stale copy can undo
-those changes, e.g. by recreating something that was just deleted.
-Answering `y` (or `a`) closes that gap immediately instead of relying on a
-manual `export` afterward, without silently clobbering whatever was there
-before if you'd rather keep it.
-
-This same **no-blind-overwrites** protection — the `[Y]es/[N]o/[A]rchive`
-prompt, only asked when the target file already exists — applies to every
-`export` command (`assignments export --out ...`, `modules export`, etc.)
-and to a full `export_course` run as well, one prompt per file it's about
-to write over.
-
-### Order of operations, when creating new content
-
-If everything you're applying already exists (you're just editing content),
-order doesn't matter — each command matches by name/title against whatever's
-currently live. It only matters when a file references something *by name*
-that doesn't exist in Canvas yet, since that lookup happens at apply-time,
-not after everything finishes:
-
-1. **Rubrics and assignment groups** first — an assignment's `rubric:` and
-   `assignment_group:` fields each have to match something that already
-   exists in the course; neither gets created automatically by
-   `assignments apply`.
-2. **Assignments and pages** next — `modules apply`'s `Assignment`/`Page`
-   items are matched by title/`page_url` against existing content; they
-   don't create it. Assignments and pages don't depend on each other, so
-   their order relative to one another doesn't matter.
-3. **Modules last** — not because anything strictly requires it, but because
-   `modules apply` is the one destructive, full-sync command (see below), so
-   running it after everything else has settled avoids syncing against
-   content that's still about to change.
-
-**Announcements aren't part of this chain at all.** A module item can only
-be `ExternalUrl`, `SubHeader`, `Page`, `Assignment`, `Quiz`, `Discussion`,
-`File`, or `ExternalTool` — there's no way to link an announcement into a
-module, so announcements have no ordering dependency with anything and can
-go whenever.
-
 ### Export an existing course from Canvas to local files
 
 Pulls a live course's rubrics, assignment groups, assignments, pages,
@@ -148,11 +68,11 @@ built course maps to these tools, or as a starting template for a new
 course. The files round-trip: applying either format back to their source
 course is a no-op. The rubric CSVs round-trip through
 `rubrics update`, not `rubrics import` — re-importing one would create a
-new rubric (or an auto-renamed one, see above) rather than updating the
+new rubric (or an auto-renamed one, see below) rather than updating the
 original; they're exported for reference, for editing via `rubrics
 update`, or to import fresh into a _different_ course.
 
-The no-blind-overwrites `[Y]es/[N]o/[A]rchive` prompt (see above) applies
+The no-blind-overwrites `[Y]es/[N]o/[A]rchive` prompt (see below) applies
 to every file this writes, rubric CSVs included — one prompt per file,
 same as `rubrics export`.
 
@@ -253,6 +173,175 @@ applied.
 
 Each overwrites only the one file it targets.
 
+### Order of operations, when creating new content
+
+If everything you're applying already exists (you're just editing content),
+order doesn't matter — each command matches by name/title against whatever's
+currently live. It only matters when a file references something *by name*
+that doesn't exist in Canvas yet, since that lookup happens at apply-time,
+not after everything finishes:
+
+1. **Rubrics and assignment groups** first — an assignment's `rubric:` and
+   `assignment_group:` fields each have to match something that already
+   exists in the course; neither gets created automatically by
+   `assignments apply`.
+2. **Assignments and pages** next — `modules apply`'s `Assignment`/`Page`
+   items are matched by title/`page_url` against existing content; they
+   don't create it. Assignments and pages don't depend on each other, so
+   their order relative to one another doesn't matter.
+3. **Modules last** — not because anything strictly requires it, but because
+   `modules apply` is the one destructive, full-sync command (see below), so
+   running it after everything else has settled avoids syncing against
+   content that's still about to change.
+
+**Announcements aren't part of this chain at all.** A module item can only
+be `ExternalUrl`, `SubHeader`, `Page`, `Assignment`, `Quiz`, `Discussion`,
+`File`, or `ExternalTool` — there's no way to link an announcement into a
+module, so announcements have no ordering dependency with anything and can
+go whenever.
+
+### Keeping local files in sync after apply/delete
+
+Every `apply` and `delete` command — for every resource type — ends by
+offering to immediately re-export Canvas's live state back to the
+course's conventional file(s) for that resource:
+
+```
+Re-export course 10001's current state to 'exports/course_10001_.../assignments.yaml' and 'exports/course_10001_.../assignments.json'? [Y]es/[N]o/[A]rchive:
+```
+
+The target is always the file(s) `{kind} export` would normally write —
+`assignments.yaml`/`.json`, `assignment_groups.yaml`/`.json`,
+`pages.yaml`/`.json`, `announcements.yaml`/`.json`, or
+`modules.yaml`/`.json` — in whatever directory `--file` lives in. It's
+deliberately **not** just whatever `--file` happened to be named: applying
+from a scratch/edit copy like `assignments_new.yaml` still resyncs the
+course's real `assignments.yaml`, exactly as if you'd run `assignments
+export` right after — not the scratch file itself.
+
+If **both** the `.yaml` and `.json` copy already exist alongside `--file`,
+one shared decision resyncs both together — editing one format by hand and
+letting the other silently drift is exactly the inconsistency this exists
+to prevent. If only one of the two exists, only that one is touched; this
+never starts a second format that was never in use. If neither exists yet,
+it falls back to a plain `[y/N]` prompt and creates a fresh `.yaml`, same
+as every other export in this tool.
+
+`--dry-run` never asks at all, since nothing changed to sync. Otherwise,
+answering the prompt means:
+
+- **Y**es — overwrite the file(s) in place.
+- **N**o (or anything else) — leave every target untouched.
+- **A**rchive — move the existing file(s) into an `archive/` subfolder next
+  to them first (created if it doesn't exist yet), renamed with a
+  timestamp reflecting your own locale's date order (e.g.
+  `modules_2026-08-16_14-30-05.yaml`, or day-before-month for a locale that
+  conventionally writes dates that way) — then write the fresh export in
+  their place.
+
+This exists because that file can silently drift out of sync with
+anything changed outside it — directly in the Canvas UI, or by a separate
+`apply`/`delete` run — and a later `apply` against the stale copy can undo
+those changes, e.g. by recreating something that was just deleted.
+Answering `y` (or `a`) closes that gap immediately instead of relying on a
+manual `export` afterward, without silently clobbering whatever was there
+before if you'd rather keep it.
+
+This same **no-blind-overwrites** protection — the `[Y]es/[N]o/[A]rchive`
+prompt, only asked when the target file already exists — applies to every
+`export` command (`assignments export --out ...`, `modules export`, etc.)
+and to a full `export_course` run as well, one prompt per file it's about
+to write over.
+
+### Rubrics: create, export, and update (CSV)
+
+Uses Canvas's own rubric CSV format — the same one behind "Import Rubric"
+in the UI (`GET /rubrics/upload_template` for a blank template). A row is
+one criterion; rows sharing a "Rubric Name" become one rubric; ratings are
+repeating `Rating Name,Rating Description,Rating Points` column-triples,
+as many as the widest criterion needs.
+
+**One CSV file per rubric, not one file for the whole course.** `rubrics
+export` writes a directory of `<rubric title>.csv` files rather than a
+single combined file — editing one rubric means editing one small,
+unambiguous file. `rubrics import` and `rubrics update` (below) each work
+on one such file at a time and error out if a file has more than one
+rubric in it.
+
+```
+python3 -m canvas_tools.cli rubrics export --course 10001 --out rubrics/
+python3 -m canvas_tools.cli rubrics import --course 10001 --file "rubrics/New Rubric.csv" --dry-run
+python3 -m canvas_tools.cli rubrics import --course 10001 --file "rubrics/New Rubric.csv"
+```
+
+Things confirmed by testing directly against a live course, not from docs
+(which don't cover this well):
+
+- **`rubrics import`** **always creates a new rubric — it never updates an
+  existing one by title.** Re-importing the same file creates a second
+  rubric with the same name, or — see next point — a name Canvas
+  auto-generates to avoid an exact collision. Use `rubrics update`
+  (below) to actually edit an existing rubric's criteria.
+
+- **Canvas auto-renames on an exact title collision.** Every rubric has a
+  `before_save` check against every other non-deleted rubric in the same
+  course; if the title you're saving already exists, it silently appends
+  `" (1)"`, `" (2)"`, etc. until unique — confirmed against Canvas's own
+  source, and it's universal (any create or rename goes through this, not
+  just CSV import). So re-importing an edited "Essay Rubric" doesn't
+  produce two rubrics both named "Essay Rubric" — it produces
+  "Essay Rubric" (the original, untouched) and "Essay Rubric (1)"
+  (the new one), which is easy to miss if your `assignments.yaml` still
+  says plain `rubric: Essay Rubric` — it'll keep matching the
+  original, not the edit you just imported. Use `rubrics update` instead
+  when you want to actually replace an existing rubric's content.
+
+- **Imported rubrics land as drafts**, invisible everywhere in Canvas
+  (the UI's rubric list, the UI's rubric picker when hand-editing another
+  assignment, `rubrics export`) until activated — this is true of rubrics
+  imported through the Canvas UI too, not just this tool; the UI's own
+  "Import Rubric" flow requires a separate manual "Save Rubric" click
+  (kebab menu > Edit > Save Rubric) to activate one. `rubrics import`
+  **does this activation automatically** — traced the UI's own network
+  request for it and replicated the same update. (Attaching a still-draft
+  rubric directly to an assignment via the `rubric:` field on
+  `assignments apply` does also work without activating first, for what
+  it's worth — draft rubrics grade correctly once associated, they're
+  just invisible until activated.)
+
+- Do **not** try to flip a rubric to "active" via a bare workflow_state
+  update yourself — confirmed destructive, it silently wipes the title
+  and criteria unless the full rubric content is resent in the same call.
+  (`activate_rubric()` in `canvas_tools/rubrics.py` does this correctly if
+  you need it directly.)
+
+**To actually edit an existing rubric's criteria** — the real use case
+being "I need to change wording/points on a rubric that's already
+attached to assignments" — use `rubrics update` instead of re-importing:
+
+```
+python3 -m canvas_tools.cli rubrics update --course 10001 --file "rubrics/Essay Rubric.csv" --dry-run
+python3 -m canvas_tools.cli rubrics update --course 10001 --file "rubrics/Essay Rubric.csv"
+```
+
+Canvas has its own protection against silently rewriting grading criteria
+out from under existing work: updating a rubric that's attached to _more
+than one_ assignment doesn't update it — it forks a new rubric with your
+edits and leaves the original (and everything attached to it) completely
+untouched (confirmed against a `rubrics_controller.rb` comment, and
+against a user report of the live UI behavior). A rubric attached to zero
+or one assignment updates in place freely.
+
+So `rubrics update` does the same thing you'd have to do by hand for a
+multi-use rubric: detach the rubric from every assignment currently using
+it (via `used_locations`), update its criteria (now safe — zero usages),
+then reattach it to every assignment it came from, restoring each one's
+`use_rubric_for_grading` setting exactly. Same rubric id and title
+throughout — no fork, no duplicate, no `assignments.yaml` changes needed
+at all. Verified live: detach → edit → reattach across three assignments
+with different `use_for_grading` values, all three came back exactly as
+they started except the rubric content itself.
+
 ### Create/update assignment groups
 
 Define assignment groups in a YAML file. Matched by exact name
@@ -333,6 +422,62 @@ that nothing of that type would be left, and requires typing the course
 ID itself to proceed, so it can't be clicked through on autopilot the way
 a habitual "yes" can.
 
+### Create/update announcements
+
+Define announcements in a YAML file (see
+`examples/announcements.example.yaml`, or
+`examples/announcements.example.json`). Matched by exact title
+(case-insensitive). Set `delayed_post_at` to schedule one for later
+instead of posting immediately.
+
+```
+python3 -m canvas_tools.cli announcements apply --course 10001 --file my_announcements.yaml --dry-run
+python3 -m canvas_tools.cli announcements apply --course 10001 --file my_announcements.yaml
+```
+
+### Delete announcements
+
+`apply`, above, never deletes anything — leaving an announcement out of
+the file just leaves it alone in Canvas. To actually remove one, use
+`delete` with its own file (see
+`examples/announcements_delete.example.yaml`) — a flat list of titles:
+
+```yaml
+announcements:
+  - "Old Reminder"
+  - "Outdated Notice"
+```
+
+```
+python3 -m canvas_tools.cli announcements delete --course 10001 --file my_announcements_delete.yaml --dry-run
+python3 -m canvas_tools.cli announcements delete --course 10001 --file my_announcements_delete.yaml
+```
+
+Every title is checked against Canvas itself — freshly fetched, not a
+local export — before anything happens, so a stale file or a typo'd title
+fails loudly instead of silently doing nothing. Even without `--dry-run`,
+the real run always prints the full plan and requires typing `yes` before
+deleting anything. If the file happens to name _every_ announcement
+currently in the course, there's a further gate requiring you to type the
+course ID itself — see the same escalation under **Delete assignment
+groups**, above.
+
+### Post one announcement to multiple courses
+
+For the common case of the same announcement going out to several
+sections at once — `canvas_tools/announcement.py`, a standalone tool (not
+YAML-driven). Skips a course if a same-titled announcement already exists
+there, so it's safe to re-run; pass `--force` to update it instead.
+
+```
+python3 -m canvas_tools.announcement --courses 10001 10002 10003 \
+  --title "Midterm reminder" \
+  --message "<p>The midterm opens Monday and closes Friday at 11:59 PM.</p>"
+
+# or from a file:
+python3 -m canvas_tools.announcement --courses 10001 10002 --title "..." --file message.html --dry-run
+```
+
 ### Bulk create/update assignments
 
 Define assignments in a YAML file (see `examples/assignments.example.yaml`
@@ -354,7 +499,7 @@ for group assignments — pair with `grade_group_students_individually`).
 Both must already exist in the course.
 
 `rubric: "Rubric Title"` attaches an existing rubric (matched by title —
-import one first with `rubrics import`, see below) to the assignment for
+import one first with `rubrics import`, see above) to the assignment for
 grading; pair with `use_rubric_for_grading: true` if the rubric's score
 should set the grade rather than being purely for feedback.
 
@@ -362,7 +507,7 @@ should set the grade rather than being purely for feedback.
 assignment — a distinct field rather than blanking `rubric:`, since blank
 means "don't touch" everywhere in this tool and detaching needs to be an
 explicit choice. **Don't use this to edit an existing rubric's content —
-use** **`rubrics update`** **instead, with the instructions below.** `remove_rubric` here is for the narrower case of
+use** **`rubrics update`** **instead, with the instructions above.** `remove_rubric` here is for the narrower case of
 detaching a rubric from one assignment and _not_ replacing it.
 
 **Checkpointed discussions** (two required submissions — an initial post
@@ -514,62 +659,6 @@ the course, there's a further gate requiring you to type the course ID
 itself — see the same escalation under **Delete assignment groups**,
 above.
 
-### Create/update announcements
-
-Define announcements in a YAML file (see
-`examples/announcements.example.yaml`, or
-`examples/announcements.example.json`). Matched by exact title
-(case-insensitive). Set `delayed_post_at` to schedule one for later
-instead of posting immediately.
-
-```
-python3 -m canvas_tools.cli announcements apply --course 10001 --file my_announcements.yaml --dry-run
-python3 -m canvas_tools.cli announcements apply --course 10001 --file my_announcements.yaml
-```
-
-### Delete announcements
-
-`apply`, above, never deletes anything — leaving an announcement out of
-the file just leaves it alone in Canvas. To actually remove one, use
-`delete` with its own file (see
-`examples/announcements_delete.example.yaml`) — a flat list of titles:
-
-```yaml
-announcements:
-  - "Old Reminder"
-  - "Outdated Notice"
-```
-
-```
-python3 -m canvas_tools.cli announcements delete --course 10001 --file my_announcements_delete.yaml --dry-run
-python3 -m canvas_tools.cli announcements delete --course 10001 --file my_announcements_delete.yaml
-```
-
-Every title is checked against Canvas itself — freshly fetched, not a
-local export — before anything happens, so a stale file or a typo'd title
-fails loudly instead of silently doing nothing. Even without `--dry-run`,
-the real run always prints the full plan and requires typing `yes` before
-deleting anything. If the file happens to name _every_ announcement
-currently in the course, there's a further gate requiring you to type the
-course ID itself — see the same escalation under **Delete assignment
-groups**, above.
-
-### Post one announcement to multiple courses
-
-For the common case of the same announcement going out to several
-sections at once — `canvas_tools/announcement.py`, a standalone tool (not
-YAML-driven). Skips a course if a same-titled announcement already exists
-there, so it's safe to re-run; pass `--force` to update it instead.
-
-```
-python3 -m canvas_tools.announcement --courses 10001 10002 10003 \
-  --title "Midterm reminder" \
-  --message "<p>The midterm opens Monday and closes Friday at 11:59 PM.</p>"
-
-# or from a file:
-python3 -m canvas_tools.announcement --courses 10001 10002 --title "..." --file message.html --dry-run
-```
-
 ### Build modules and link items
 
 **Unlike every other** **`apply`** **command in this toolkit, this one deletes.**
@@ -671,95 +760,6 @@ or by re-querying the API).
 **This changes real course content — there's no dry-run for it.** Double
 check `--source` and `--dest` course IDs (from `courses list`) before
 running.
-
-### Rubrics: create, export, and update (CSV)
-
-Uses Canvas's own rubric CSV format — the same one behind "Import Rubric"
-in the UI (`GET /rubrics/upload_template` for a blank template). A row is
-one criterion; rows sharing a "Rubric Name" become one rubric; ratings are
-repeating `Rating Name,Rating Description,Rating Points` column-triples,
-as many as the widest criterion needs.
-
-**One CSV file per rubric, not one file for the whole course.** `rubrics
-export` writes a directory of `<rubric title>.csv` files rather than a
-single combined file — editing one rubric means editing one small,
-unambiguous file. `rubrics import` and `rubrics update` (below) each work
-on one such file at a time and error out if a file has more than one
-rubric in it.
-
-```
-python3 -m canvas_tools.cli rubrics export --course 10001 --out rubrics/
-python3 -m canvas_tools.cli rubrics import --course 10001 --file "rubrics/New Rubric.csv" --dry-run
-python3 -m canvas_tools.cli rubrics import --course 10001 --file "rubrics/New Rubric.csv"
-```
-
-Things confirmed by testing directly against a live course, not from docs
-(which don't cover this well):
-
-- **`rubrics import`** **always creates a new rubric — it never updates an
-  existing one by title.** Re-importing the same file creates a second
-  rubric with the same name, or — see next point — a name Canvas
-  auto-generates to avoid an exact collision. Use `rubrics update`
-  (below) to actually edit an existing rubric's criteria.
-
-- **Canvas auto-renames on an exact title collision.** Every rubric has a
-  `before_save` check against every other non-deleted rubric in the same
-  course; if the title you're saving already exists, it silently appends
-  `" (1)"`, `" (2)"`, etc. until unique — confirmed against Canvas's own
-  source, and it's universal (any create or rename goes through this, not
-  just CSV import). So re-importing an edited "Essay Rubric" doesn't
-  produce two rubrics both named "Essay Rubric" — it produces
-  "Essay Rubric" (the original, untouched) and "Essay Rubric (1)"
-  (the new one), which is easy to miss if your `assignments.yaml` still
-  says plain `rubric: Essay Rubric` — it'll keep matching the
-  original, not the edit you just imported. Use `rubrics update` instead
-  when you want to actually replace an existing rubric's content.
-
-- **Imported rubrics land as drafts**, invisible everywhere in Canvas
-  (the UI's rubric list, the UI's rubric picker when hand-editing another
-  assignment, `rubrics export`) until activated — this is true of rubrics
-  imported through the Canvas UI too, not just this tool; the UI's own
-  "Import Rubric" flow requires a separate manual "Save Rubric" click
-  (kebab menu > Edit > Save Rubric) to activate one. `rubrics import`
-  **does this activation automatically** — traced the UI's own network
-  request for it and replicated the same update. (Attaching a still-draft
-  rubric directly to an assignment via the `rubric:` field on
-  `assignments apply` does also work without activating first, for what
-  it's worth — draft rubrics grade correctly once associated, they're
-  just invisible until activated.)
-
-- Do **not** try to flip a rubric to "active" via a bare workflow_state
-  update yourself — confirmed destructive, it silently wipes the title
-  and criteria unless the full rubric content is resent in the same call.
-  (`activate_rubric()` in `canvas_tools/rubrics.py` does this correctly if
-  you need it directly.)
-
-**To actually edit an existing rubric's criteria** — the real use case
-being "I need to change wording/points on a rubric that's already
-attached to assignments" — use `rubrics update` instead of re-importing:
-
-```
-python3 -m canvas_tools.cli rubrics update --course 10001 --file "rubrics/Essay Rubric.csv" --dry-run
-python3 -m canvas_tools.cli rubrics update --course 10001 --file "rubrics/Essay Rubric.csv"
-```
-
-Canvas has its own protection against silently rewriting grading criteria
-out from under existing work: updating a rubric that's attached to _more
-than one_ assignment doesn't update it — it forks a new rubric with your
-edits and leaves the original (and everything attached to it) completely
-untouched (confirmed against a `rubrics_controller.rb` comment, and
-against a user report of the live UI behavior). A rubric attached to zero
-or one assignment updates in place freely.
-
-So `rubrics update` does the same thing you'd have to do by hand for a
-multi-use rubric: detach the rubric from every assignment currently using
-it (via `used_locations`), update its criteria (now safe — zero usages),
-then reattach it to every assignment it came from, restoring each one's
-`use_rubric_for_grading` setting exactly. Same rubric id and title
-throughout — no fork, no duplicate, no `assignments.yaml` changes needed
-at all. Verified live: detach → edit → reattach across three assignments
-with different `use_for_grading` values, all three came back exactly as
-they started except the rubric content itself.
 
 ## Notes
 
