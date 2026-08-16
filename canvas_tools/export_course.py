@@ -121,13 +121,35 @@ def _prompt_overwrite(path):
     return reply
 
 
-def _resolve_write_decision(path):
+class OverwritePolicy:
+    """Remembers a single Y/N/A overwrite decision across every file written
+    in one run, once the user opts into that after the first prompt — so a
+    full course export re-run doesn't have to answer the same "already
+    exists" question for every one of a dozen-plus files. Pass the same
+    instance to every write call across a run; leave it as None (the
+    default everywhere) for a one-off write, like a single `assignments
+    export`, where "apply to everything else" wouldn't mean anything."""
+
+    def __init__(self):
+        self.remembered = None
+
+    def decide(self, path):
+        if self.remembered is not None:
+            return self.remembered
+        decision = _prompt_overwrite(path)
+        apply_all = input("Apply that choice to every other file in this run too? [y/N]: ").strip().lower()
+        if apply_all in ("y", "yes"):
+            self.remembered = decision
+        return decision
+
+
+def _resolve_write_decision(path, policy=None):
     """Shared no-blind-overwrite gate for a single file: prompts (and
     archives, if asked) when `path` already exists, before the caller does
     the actual write. Returns 'write' or 'skip'."""
     if not os.path.exists(path):
         return "write"
-    reply = _prompt_overwrite(path)
+    reply = policy.decide(path) if policy is not None else _prompt_overwrite(path)
     if reply in ("n", "no"):
         print(f"skipped {path!r}")
         return "skip"
@@ -137,23 +159,25 @@ def _resolve_write_decision(path):
     return "write"
 
 
-def write_with_confirmation(data, path, header_comment=None):
+def write_with_confirmation(data, path, header_comment=None, policy=None):
     """`dump_data`, but never a blind overwrite: if `path` already exists,
     ask whether to overwrite it in place, skip it entirely, or archive the
     old copy first (see `_archive_existing`). Returns False if the file was
-    left untouched (the user chose to skip it), True otherwise."""
-    if _resolve_write_decision(path) == "skip":
+    left untouched (the user chose to skip it), True otherwise. Pass an
+    `OverwritePolicy` shared across a whole run to avoid re-prompting for
+    every file once the user opts into "apply to everything else"."""
+    if _resolve_write_decision(path, policy) == "skip":
         return False
     dump_data(data, path, header_comment=header_comment)
     return True
 
 
-def write_text_with_confirmation(path, text, newline=None):
+def write_text_with_confirmation(path, text, newline=None, policy=None):
     """Same no-blind-overwrite protection as `write_with_confirmation`, for
     plain-text output (e.g. rubric CSVs) that doesn't go through
     `dump_data`. Returns False if the file was left untouched, True
     otherwise."""
-    if _resolve_write_decision(path) == "skip":
+    if _resolve_write_decision(path, policy) == "skip":
         return False
     with open(path, "w", newline=newline) as f:
         f.write(text)
@@ -342,7 +366,9 @@ def _ext(fmt):
     return "json" if fmt == "json" else "yaml"
 
 
-def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",)):
+def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",), policy=None):
+    if policy is None:
+        policy = OverwritePolicy()
     course_code = c.get(f"courses/{course_id}").get("course_code")
     out = os.path.join(out_parent, _course_folder_name(course_id, course_code))
     os.makedirs(out, exist_ok=True)
@@ -353,7 +379,7 @@ def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",)
     os.makedirs(rubrics_dir, exist_ok=True)
     written = 0
     for filename, csv_text in rubric_files:
-        if write_text_with_confirmation(os.path.join(rubrics_dir, filename), csv_text, newline=""):
+        if write_text_with_confirmation(os.path.join(rubrics_dir, filename), csv_text, newline="", policy=policy):
             written += 1
     print(f"wrote {written} rubrics -> {rubrics_dir}/")
 
@@ -361,7 +387,10 @@ def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",)
     for fmt in formats:
         path = os.path.join(out, f"assignment_groups.{_ext(fmt)}")
         if write_with_confirmation(
-            assignment_groups, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas assignment_groups apply`\n"
+            assignment_groups,
+            path,
+            header_comment=f"# Exported from course {course_id} — schema matches `canvas assignment_groups apply`\n",
+            policy=policy,
         ):
             print(f"wrote {len(assignment_groups['assignment_groups'])} assignment groups -> {path}")
 
@@ -369,21 +398,29 @@ def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",)
     for fmt in formats:
         path = os.path.join(out, f"assignments.{_ext(fmt)}")
         if write_with_confirmation(
-            assignments, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas assignments apply`\n"
+            assignments,
+            path,
+            header_comment=f"# Exported from course {course_id} — schema matches `canvas assignments apply`\n",
+            policy=policy,
         ):
             print(f"wrote {len(assignments['assignments'])} assignments -> {path}")
 
     pages = export_pages(c, course_id, verbose=verbose)
     for fmt in formats:
         path = os.path.join(out, f"pages.{_ext(fmt)}")
-        if write_with_confirmation(pages, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas pages apply`\n"):
+        if write_with_confirmation(
+            pages, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas pages apply`\n", policy=policy
+        ):
             print(f"wrote {len(pages['pages'])} pages -> {path}")
 
     announcements = export_announcements(c, course_id)
     for fmt in formats:
         path = os.path.join(out, f"announcements.{_ext(fmt)}")
         if write_with_confirmation(
-            announcements, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas announcements apply`\n"
+            announcements,
+            path,
+            header_comment=f"# Exported from course {course_id} — schema matches `canvas announcements apply`\n",
+            policy=policy,
         ):
             print(f"wrote {len(announcements['announcements'])} announcements -> {path}")
 
@@ -400,6 +437,7 @@ def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",)
                 "# items — a module or item missing from this file gets DELETED from the course,\n"
                 "# not just left alone. Always --dry-run before applying an edited copy of this file.\n"
             ),
+            policy=policy,
         ):
             print(f"wrote {len(modules['modules'])} modules / {total_items} items -> {path}")
 
@@ -457,12 +495,18 @@ def main():
 
     formats = [args.format] if args.format else ["yaml", "json"]
 
+    # One policy shared across every course in this run — an "apply to
+    # everything else" answer to the first overwrite prompt then covers the
+    # rest of a multi-course --all/--course A B C run too, not just the
+    # rest of one course's own files.
+    policy = OverwritePolicy()
+
     failed = []
     for i, course_id in enumerate(course_ids):
         if len(course_ids) > 1:
             print(f"\n=== [{i + 1}/{len(course_ids)}] course {course_id} ===")
         try:
-            export_one_course(c, course_id, args.out, verbose=args.verbose, formats=formats)
+            export_one_course(c, course_id, args.out, verbose=args.verbose, formats=formats, policy=policy)
         except CanvasError as e:
             print(f"course {course_id}: ERROR — {e}")
             failed.append(course_id)

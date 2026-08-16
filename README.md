@@ -253,6 +253,19 @@ prompt, only asked when the target file already exists — applies to every
 and to a full `export_course` run as well, one prompt per file it's about
 to write over.
 
+A full `export_course` run can hit that prompt a dozen-plus times in a row
+(five resources × two formats, plus one per rubric) if you're re-exporting
+a course that's already fully exported — answering the same question that
+many times gets old fast. So the first time it asks, it asks a follow-up:
+`Apply that choice to every other file in this run too? [y/N]`. Say yes and
+whichever you picked (overwrite/skip/archive) is applied silently to every
+remaining file for the rest of that run — across every course too, if
+you're exporting more than one in the same `--all`/`--course A B C` call.
+Say no (or anything else) and it keeps asking per file, same as before.
+This follow-up only appears in `export_course`; a single-file `export`
+command never asks it, since there'd be nothing else in that run to apply
+it to.
+
 ### Rubrics: create, export, and update (CSV)
 
 Uses Canvas's own rubric CSV format — the same one behind "Import Rubric"
