@@ -25,19 +25,36 @@ instance, using the Canvas REST API directly.
 
 Note: The .env file must be named exactly. If you have forked this, the .gitignore file will not publish your private credentials if you push to a public repo.
 
-### Dependencies
+### Install into a virtual environment
 
-Dependencies (`requests`, `pyyaml`, `python-dotenv`, `beautifulsoup4`) are
-already installed in this environment. If you're setting this up somewhere
-new, `pip install -e .` from the project root installs all of them from
-`pyproject.toml` — and also registers every shortcut command (`agroups`,
-`acleanup`, `exco`, etc.) on your `PATH`, runnable bare from any directory
-without the `python3 -m canvas_tools.cli` prefix. See `shortcuts.md` for
-the full list.
+The default, recommended way to set this up — keeps this project's
+dependencies isolated from everything else on your system, whether that's
+your own machine or anyone else's who picks this up:
+
+```
+python3 -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -e .
+```
+
+That last command reads `pyproject.toml` and installs everything this
+project needs (`requests`, `pyyaml`, `python-dotenv`, `beautifulsoup4`) —
+and also registers every shortcut command (`agroups`, `acleanup`, `exco`,
+etc.) on your `PATH`, runnable bare from any directory without the
+`python3 -m canvas_tools.cli` prefix. See `shortcuts.md` for the full list.
+
+The venv only needs creating once; after that, `source .venv/bin/activate`
+(run from the project root, or give it the full path from anywhere) is
+what you need at the start of each new shell session before using any of
+these commands. You'll know it's active when your prompt shows `(.venv)`.
 
 ## How to Use
 
-Run everything from this directory as a module:
+With the virtual environment active (see Install, above), every command in
+this doc can be run either as its shortcut (`agroups ...`, `acleanup ...`,
+see `shortcuts.md`) or spelled out in full — both work from any directory,
+not just the project root, since `pip install -e .` is what makes
+`canvas_tools` importable in the first place:
 
 ```
 python3 -m canvas_tools.cli <command> ...
