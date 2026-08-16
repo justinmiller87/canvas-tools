@@ -275,11 +275,38 @@ python3 -m canvas_tools.cli archive cleanup --dry-run
 python3 -m canvas_tools.cli archive cleanup
 ```
 
-`--path` (default: this project's own `exports/` folder) is searched
-recursively for every directory named `archive` — there's normally more
-than one, since rubric CSVs archive into their own `rubrics/archive/`
-subfolder separately from everything else. It then asks how to clean up
-what it found:
+Each course has exactly one `archive/` folder, directly inside its own
+export directory — everything gets archived there, rubric CSVs included
+(their `rubrics/` subfolder doesn't get its own separate archive). `--path`
+(default: this project's own `exports/` folder) is searched recursively for
+every directory named `archive`, so running this from the top of `exports/`
+finds every course's at once. If more than one turns up, an interactive
+checklist opens before anything else happens:
+
+```
+Found 2 archive folders (↑/↓ move, space toggle, a=all, n=none, enter=confirm):
+> [ ] course_10001_26-FA_XXX-100-OL01/archive (10 file(s))
+  [*] course_10002_26-FA_XXX-200-OL01/archive (21 file(s))
+  [A]ll
+  [N]one
+```
+
+↑/↓ moves the highlighted row, space toggles it, `a`/`n` check/uncheck
+everything at once, and Enter confirms whatever's checked — Escape cancels
+outright. Running the default `--path` for real should never accidentally
+wipe out a different course's archives than the one you meant, and this is
+what stands between that and a single unchecked "yes." (This checklist
+needs a real terminal; piped/non-interactive input falls back to a plain
+numbered prompt instead.)
+
+**If you checked more than one folder**, it asks one more thing first:
+apply the same cleanup choice to every folder you picked, or choose
+separately for each one (`For course_10002_..., what would you like to
+clean up?`, once per folder, before anything is deleted). This is skipped
+entirely — straight to the menu below — when only one folder was selected,
+either because there was only one to begin with or because you checked
+just one from the list. It then asks how to clean up what's in the
+folder(s) in question:
 
 - **[A]ll** — delete every archived file.
 - **[M]ost recent** — for each original file, keep only its newest

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import contextlib
 import csv
 import io
 import os
@@ -1227,25 +1228,197 @@ def _human_size(num_bytes):
         size /= 1024
 
 
-def cmd_archive_cleanup(args, c):
-    archive_dirs = find_archive_dirs(args.path)
-    if not archive_dirs:
-        print(f"No archive folders found under {args.path!r}.")
+def _count_files(directory):
+    return sum(1 for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f)))
+
+
+@contextlib.contextmanager
+def _raw_terminal():
+    """Puts stdin into raw (unbuffered, unechoed) mode for the duration of
+    an interactive keypress-driven UI — set once for the whole interaction,
+    not per keystroke, since toggling back to cooked mode between reads
+    lets the terminal's own line discipline (buffering, local echo) mangle
+    a fast-arriving multi-byte sequence like an arrow key before the next
+    read re-enters raw mode. Restores the previous settings no matter how
+    the block exits. No-op on Windows, where `msvcrt.getch()` already
+    reads raw without needing a mode change."""
+    try:
+        import termios
+        import tty
+    except ImportError:
+        yield
         return
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        yield
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
-    entries = list_archived_files(archive_dirs)
-    if not entries:
-        print(f"Found {len(archive_dirs)} archive folder(s) under {args.path!r}, but none contain any files.")
-        return
 
-    total_size = sum(os.path.getsize(e["path"]) for e in entries)
+def _read_key():
+    """Block for a single keypress (stdin must already be in raw mode — see
+    `_raw_terminal`) and return one of 'up', 'down', 'space', 'enter', 'a',
+    'n', 'escape', or None for anything else. Cross-platform: `msvcrt` on
+    Windows, plain reads on POSIX. A lone Escape press is told apart from
+    the start of an arrow-key escape sequence via a short non-blocking
+    wait for the rest of the sequence, so pressing just Escape doesn't
+    hang waiting for bytes that are never coming."""
+    try:
+        import msvcrt
+    except ImportError:
+        msvcrt = None
+
+    if msvcrt is not None:
+        ch = msvcrt.getch()
+        if ch in (b"\x00", b"\xe0"):
+            ch2 = msvcrt.getch()
+            return {b"H": "up", b"P": "down"}.get(ch2)
+        if ch == b"\x03":
+            raise KeyboardInterrupt
+        if ch in (b"\r", b"\n"):
+            return "enter"
+        if ch == b" ":
+            return "space"
+        if ch == b"\x1b":
+            return "escape"
+        try:
+            c = ch.decode().lower()
+        except UnicodeDecodeError:
+            return None
+        return c if c in ("a", "n") else None
+
+    import select
+
+    # `os.read` on the raw fd, not `sys.stdin.read` — Python's buffered
+    # TextIOWrapper can slurp extra already-arrived bytes (e.g. the "[A" of
+    # an arrow key) into its own userspace buffer on the first read, which
+    # `select.select` on the fd then has no way to see, making the below
+    # falsely conclude nothing else is coming and misread a real escape
+    # sequence as a lone Escape press.
+    fd = sys.stdin.fileno()
+    ch = os.read(fd, 1).decode(errors="replace")
+    if ch == "\x1b":
+        if select.select([fd], [], [], 0.1)[0]:
+            ch2 = os.read(fd, 1).decode(errors="replace")
+            if ch2 == "[" and select.select([fd], [], [], 0.1)[0]:
+                ch3 = os.read(fd, 1).decode(errors="replace")
+                return {"A": "up", "B": "down"}.get(ch3)
+            return None
+        return "escape"
+    if ch in ("\r", "\n"):
+        return "enter"
+    if ch == " ":
+        return "space"
+    if ch == "\x03":
+        raise KeyboardInterrupt
+    c = ch.lower()
+    return c if c in ("a", "n") else None
+
+
+def _select_archive_dirs_noninteractive(archive_dirs, root):
+    """Plain numbered-prompt fallback for when stdin isn't a real terminal
+    (piped input, non-interactive automation) — the arrow-key/checkbox UI
+    needs raw keypress reading, which needs a real tty."""
+    print(f"\nFound {len(archive_dirs)} archive folders:")
+    for i, d in enumerate(archive_dirs, start=1):
+        print(f"  [{i}] {os.path.relpath(d, root)} ({_count_files(d)} file(s))")
+    print("  [A]ll\n  [N]one")
+
+    while True:
+        reply = input("\nWhich archive folder(s) should be cleaned up? (comma-separated numbers, 'all', or 'none'): ").strip().lower()
+        if reply in ("a", "all"):
+            return archive_dirs
+        if reply in ("n", "none"):
+            return []
+        parts = [p.strip() for p in reply.split(",") if p.strip()]
+        if parts and all(p.isdigit() and 1 <= int(p) <= len(archive_dirs) for p in parts):
+            chosen = sorted({int(p) for p in parts})
+            return [archive_dirs[i - 1] for i in chosen]
+        print(f"Enter one or more numbers from 1-{len(archive_dirs)} (comma-separated), 'all', or 'none'.")
+
+
+def _select_archive_dirs(archive_dirs, root):
+    """If more than one archive/ folder was found, ask which one(s) to
+    actually clean up — defaulting to "clean up every archive folder under
+    --path" would be a real problem the first time --path is the whole
+    exports/ tree covering every course, not just the one you meant.
+    Interactive checkbox UI: ↑/↓ moves the active row, space toggles it,
+    a/n select all/none, enter confirms whatever's checked."""
+    if len(archive_dirs) == 1:
+        return archive_dirs
+    if not sys.stdin.isatty():
+        return _select_archive_dirs_noninteractive(archive_dirs, root)
+
+    labels = [f"{os.path.relpath(d, root)} ({_count_files(d)} file(s))" for d in archive_dirs]
+    n = len(archive_dirs)
+    selected = [False] * n
+    cursor = 0
+
+    def render():
+        lines = [f"{'>' if i == cursor else ' '} [{'*' if selected[i] else ' '}] {label}" for i, label in enumerate(labels)]
+        lines.append("  [A]ll")
+        lines.append("  [N]one")
+        return lines
+
+    # Raw mode disables the terminal's own \n -> \r\n translation (ONLCR),
+    # so every line written while it's active has to end with an explicit
+    # \r\n itself, or each line starts one column further right than the
+    # last (confirmed live: produced an actual staircase of lines running
+    # off the right edge of the terminal). The whole interactive section —
+    # including the very first render, not just the redraws after a
+    # keypress — lives inside one `_raw_terminal()` block so every write
+    # uses the same convention throughout, rather than mixing `print()`
+    # (fine, but only outside raw mode) with raw `sys.stdout.write`.
+    def write_line(text=""):
+        sys.stdout.write(text + "\r\n")
+
+    with _raw_terminal():
+        write_line()
+        write_line(f"Found {n} archive folders (↑/↓ move, space toggle, a=all, n=none, enter=confirm):")
+        lines = render()
+        for line in lines:
+            write_line(line)
+        sys.stdout.flush()
+
+        while True:
+            key = _read_key()
+            if key == "up":
+                cursor = (cursor - 1) % n
+            elif key == "down":
+                cursor = (cursor + 1) % n
+            elif key == "space":
+                selected[cursor] = not selected[cursor]
+            elif key == "a":
+                selected = [True] * n
+            elif key == "n":
+                selected = [False] * n
+            elif key == "escape":
+                selected = [False] * n
+                break
+            elif key == "enter":
+                break
+            else:
+                continue
+            new_lines = render()
+            sys.stdout.write(f"\x1b[{len(lines)}A")
+            for line in new_lines:
+                sys.stdout.write("\r\x1b[2K" + line + "\r\n")
+            sys.stdout.flush()
+            lines = new_lines
+
+    return [d for d, s in zip(archive_dirs, selected) if s]
+
+
+def _prompt_cleanup_mode(label=None):
+    """The [A]ll/[M]ost recent/[T]ime/[C]ancel menu, optionally headed
+    "For <label>, ..." when it's being asked once per selected folder
+    rather than once for the whole run. Returns (mode, cutoff), or None if
+    cancelled."""
+    header = f"For {label}, what would you like to clean up?" if label else "What would you like to clean up?"
     print(
-        f"Found {len(entries)} archived file(s) across {len(archive_dirs)} archive folder(s) "
-        f"under {args.path!r} ({_human_size(total_size)})."
-    )
-
-    print(
-        "\nWhat would you like to clean up?\n"
+        f"\n{header}\n"
         "  [A]ll — delete every archived file\n"
         "  [M]ost recent — keep only the newest archived copy of each file, delete the rest\n"
         "  [T]ime — delete archived files older than a chosen cutoff\n"
@@ -1254,25 +1427,76 @@ def cmd_archive_cleanup(args, c):
     choice = input("> ").strip().lower()
 
     if choice in ("a", "all"):
-        mode, cutoff = "all", None
-    elif choice in ("m", "most recent", "mostrecent", "most-recent"):
-        mode, cutoff = "keep_recent", None
-    elif choice in ("t", "time"):
+        return "all", None
+    if choice in ("m", "most recent", "mostrecent", "most-recent"):
+        return "keep_recent", None
+    if choice in ("t", "time"):
         window_prompt = "\nDelete files older than:\n" + "\n".join(
             f"  [{key}] {label}" for key, (label, _delta) in TIME_WINDOWS.items()
         )
         print(window_prompt)
         window_choice = input("> ").strip()
         if window_choice not in TIME_WINDOWS:
-            print("Not a valid choice — cancelled, nothing deleted.")
-            return
+            print("Not a valid choice.")
+            return None
         _label, delta = TIME_WINDOWS[window_choice]
-        mode, cutoff = "older_than", datetime.now() - delta
-    else:
-        print("Cancelled — nothing deleted.")
+        return "older_than", datetime.now() - delta
+    return None
+
+
+def cmd_archive_cleanup(args, c):
+    archive_dirs = find_archive_dirs(args.path)
+    if not archive_dirs:
+        print(f"No archive folders found under {args.path!r}.")
         return
 
-    selected = select_for_cleanup(entries, mode, cutoff=cutoff)
+    archive_dirs = _select_archive_dirs(archive_dirs, args.path)
+    if not archive_dirs:
+        print("No archive folders selected — nothing to clean up.")
+        return
+
+    per_folder = False
+    if len(archive_dirs) > 1:
+        reply = input(
+            "\nApply the same cleanup choice to every selected folder, or choose separately for each?\n"
+            "  [A]ll — same choice for every folder\n"
+            "  [E]ach — choose separately per folder\n> "
+        ).strip().lower()
+        per_folder = reply in ("e", "each")
+
+    if per_folder:
+        selected = []
+        for d in archive_dirs:
+            course_label = os.path.relpath(os.path.dirname(d), args.path)
+            entries = list_archived_files([d])
+            if not entries:
+                print(f"\nFor {course_label}: no archived files, skipping.")
+                continue
+            result = _prompt_cleanup_mode(label=course_label)
+            if result is None:
+                print(f"  cancelled for {course_label} — skipping.")
+                continue
+            mode, cutoff = result
+            selected.extend(select_for_cleanup(entries, mode, cutoff=cutoff))
+    else:
+        entries = list_archived_files(archive_dirs)
+        if not entries:
+            print(f"Found {len(archive_dirs)} archive folder(s) under {args.path!r}, but none contain any files.")
+            return
+
+        total_size = sum(os.path.getsize(e["path"]) for e in entries)
+        print(
+            f"Found {len(entries)} archived file(s) across {len(archive_dirs)} archive folder(s) "
+            f"under {args.path!r} ({_human_size(total_size)})."
+        )
+
+        result = _prompt_cleanup_mode()
+        if result is None:
+            print("Cancelled — nothing deleted.")
+            return
+        mode, cutoff = result
+        selected = select_for_cleanup(entries, mode, cutoff=cutoff)
+
     if not selected:
         print("Nothing matches that — nothing to delete.")
         return

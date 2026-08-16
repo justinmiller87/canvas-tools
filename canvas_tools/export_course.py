@@ -103,10 +103,16 @@ def _archive_timestamp():
 
 
 def _archive_existing(path):
-    """Move an existing file into an `archive/` subfolder next to it,
+    """Move an existing file into the course's single `archive/` folder,
     renamed with a local timestamp, so `write_with_confirmation`'s "archive"
-    choice never just silently clobbers the old copy."""
+    choice never just silently clobbers the old copy. Every archived file
+    for a course lands in one shared `archive/` next to that course's own
+    resource files — including rubric CSVs, which live one level down in
+    `rubrics/`, so their archive folder is hoisted up to the course level
+    too rather than creating a second, separate `rubrics/archive/`."""
     directory = os.path.dirname(path) or "."
+    if os.path.basename(directory) == "rubrics":
+        directory = os.path.dirname(directory) or "."
     archive_dir = os.path.join(directory, "archive")
     os.makedirs(archive_dir, exist_ok=True)
     base, ext = os.path.splitext(os.path.basename(path))
