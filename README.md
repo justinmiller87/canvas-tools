@@ -209,6 +209,19 @@ python3 -m canvas_tools.cli announcements    export --course 10001 --out "export
 python3 -m canvas_tools.cli modules          export --course 10001 --out "exports/course_10001_26-FA_XXX-100-OL01/modules.yaml"
 ```
 
+**Large modules are always fetched correctly, not trusted blindly.**
+Canvas's module-list API silently omits a module's items once it has
+enough of them (confirmed live against a 223-item module — the response
+had `items_count: 223` but no `items` field at all, not even a partial
+list) instead of erroring or truncating visibly. `modules export`
+cross-checks every module's item count against what actually came back
+and transparently re-fetches from that module's own items endpoint
+whenever they don't match, so a big module never exports as falsely
+empty. This matters beyond the export file being wrong: `modules apply`
+deletes any item not listed under its module, so a falsely-empty export
+would have deleted everything in that module the next time it was
+applied.
+
 Each overwrites only the one file it targets.
 
 ### Create/update assignment groups

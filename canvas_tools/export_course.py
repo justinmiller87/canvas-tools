@@ -197,8 +197,23 @@ def export_modules(c, course_id):
             mod_entry["require_sequential_progress"] = True
         if m.get("prerequisite_module_ids"):
             mod_entry["prerequisites"] = [names_by_id[pid] for pid in m["prerequisite_module_ids"] if pid in names_by_id]
+
+        # `include[]=items` on the modules LIST endpoint silently omits items
+        # for modules above some internal item-count threshold — confirmed
+        # live against a 223-item module, which came back with
+        # `items_count: 223` but no `items` key at all, not even a partial
+        # list. Trusting that silently-empty list here would be actively
+        # dangerous: `modules apply` deletes any item not listed under its
+        # module, so an under-counted export could wipe out real content the
+        # next time it's applied. Always cross-check against items_count and
+        # re-fetch via the module's own items endpoint whenever they
+        # disagree, instead of trusting the list include blindly.
+        raw_items = m.get("items", [])
+        if m.get("items_count") is not None and len(raw_items) != m["items_count"]:
+            raw_items = c.get(f"courses/{course_id}/modules/{m['id']}/items", params={"per_page": 100})
+
         mod_entry["items"] = []
-        for it in m.get("items", []):
+        for it in raw_items:
             entry = {"type": it["type"], "title": it["title"]}
             if it.get("indent"):
                 entry["indent"] = it["indent"]
