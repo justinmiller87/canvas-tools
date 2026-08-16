@@ -47,6 +47,9 @@ The venv only needs creating once; after that, `source .venv/bin/activate`
 (run from the project root, or give it the full path from anywhere) is
 what you need at the start of each new shell session before using any of
 these commands. You'll know it's active when your prompt shows `(.venv)`.
+Run `deactivate` (no arguments, works from any directory) when you're done
+and want your shell back to normal — that's the same `activate` script's
+doing, not something specific to this project.
 
 ## How to Use
 
