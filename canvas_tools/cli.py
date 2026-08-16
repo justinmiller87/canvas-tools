@@ -21,7 +21,13 @@ from canvas_tools.export_course import (
     write_with_confirmation,
     write_text_with_confirmation,
     _archive_existing,
+    _DEFAULT_OUT,
+    find_archive_dirs,
+    list_archived_files,
+    select_for_cleanup,
+    TIME_WINDOWS,
 )
+from datetime import datetime
 from canvas_tools.progress import Progress
 
 
@@ -1213,6 +1219,82 @@ def cmd_copy(args, c):
         sys.exit(1)
 
 
+def _human_size(num_bytes):
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+
+
+def cmd_archive_cleanup(args, c):
+    archive_dirs = find_archive_dirs(args.path)
+    if not archive_dirs:
+        print(f"No archive folders found under {args.path!r}.")
+        return
+
+    entries = list_archived_files(archive_dirs)
+    if not entries:
+        print(f"Found {len(archive_dirs)} archive folder(s) under {args.path!r}, but none contain any files.")
+        return
+
+    total_size = sum(os.path.getsize(e["path"]) for e in entries)
+    print(
+        f"Found {len(entries)} archived file(s) across {len(archive_dirs)} archive folder(s) "
+        f"under {args.path!r} ({_human_size(total_size)})."
+    )
+
+    print(
+        "\nWhat would you like to clean up?\n"
+        "  [A]ll — delete every archived file\n"
+        "  [M]ost recent — keep only the newest archived copy of each file, delete the rest\n"
+        "  [T]ime — delete archived files older than a chosen cutoff\n"
+        "  [C]ancel"
+    )
+    choice = input("> ").strip().lower()
+
+    if choice in ("a", "all"):
+        mode, cutoff = "all", None
+    elif choice in ("m", "most recent", "mostrecent", "most-recent"):
+        mode, cutoff = "keep_recent", None
+    elif choice in ("t", "time"):
+        window_prompt = "\nDelete files older than:\n" + "\n".join(
+            f"  [{key}] {label}" for key, (label, _delta) in TIME_WINDOWS.items()
+        )
+        print(window_prompt)
+        window_choice = input("> ").strip()
+        if window_choice not in TIME_WINDOWS:
+            print("Not a valid choice — cancelled, nothing deleted.")
+            return
+        _label, delta = TIME_WINDOWS[window_choice]
+        mode, cutoff = "older_than", datetime.now() - delta
+    else:
+        print("Cancelled — nothing deleted.")
+        return
+
+    selected = select_for_cleanup(entries, mode, cutoff=cutoff)
+    if not selected:
+        print("Nothing matches that — nothing to delete.")
+        return
+
+    print(f"\nThe following {len(selected)} file(s) would be deleted:")
+    for e in sorted(selected, key=lambda e: e["path"]):
+        print(f"  {e['path']}  (archived {e['when']:%Y-%m-%d %H:%M:%S})")
+
+    if args.dry_run:
+        print("\n[dry-run] nothing deleted.")
+        return
+
+    reply = input(f"\nType 'yes' to permanently delete these {len(selected)} file(s): ").strip().lower()
+    if reply != "yes":
+        print("Cancelled — nothing deleted.")
+        return
+
+    for e in selected:
+        os.remove(e["path"])
+    print(f"deleted {len(selected)} file(s).")
+
+
 def cmd_rubrics_export(args, c):
     files = export_rubrics_csv(c, args.course, verbose=args.verbose)
     os.makedirs(args.out, exist_ok=True)
@@ -1376,6 +1458,17 @@ def build_parser():
     p_mod_export.add_argument("--course", required=True, help="Canvas course ID")
     p_mod_export.add_argument("--out", required=True, help="Output YAML path")
     p_mod_export.set_defaults(func=cmd_modules_export)
+
+    p_archive = sub.add_parser("archive", help="Manage archived files left behind by the [A]rchive overwrite choice")
+    sub_archive = p_archive.add_subparsers(dest="subcommand", required=True)
+    p_archive_cleanup = sub_archive.add_parser("cleanup", help="Interactively delete old archived files")
+    p_archive_cleanup.add_argument(
+        "--path",
+        default=_DEFAULT_OUT,
+        help="Directory to search (recursively) for archive/ folders — default: this project's own exports/ folder",
+    )
+    p_archive_cleanup.add_argument("--dry-run", action="store_true", help="Show what would be deleted without deleting anything")
+    p_archive_cleanup.set_defaults(func=cmd_archive_cleanup)
 
     p_copy = sub.add_parser("copy", help="Copy content from one course to another")
     p_copy.add_argument("--source", required=True, help="Source course ID")

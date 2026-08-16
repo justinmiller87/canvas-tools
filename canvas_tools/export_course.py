@@ -7,7 +7,8 @@ import argparse
 import json
 import locale
 import os
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 
 import yaml
 
@@ -182,6 +183,94 @@ def write_text_with_confirmation(path, text, newline=None, policy=None):
     with open(path, "w", newline=newline) as f:
         f.write(text)
     return True
+
+
+_ARCHIVE_FILENAME_RE = re.compile(r"^(?P<base>.+)_(?P<ts>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})(?P<ext>\.[^.]*)?$")
+
+
+def _archive_timestamp_patterns():
+    """Try the current locale's date order first (most likely correct, since
+    cleanup normally runs on the same machine that did the archiving), then
+    the other order as a fallback for a file archived under a different
+    locale — an out-of-range month/day in the wrong order fails to parse
+    cleanly, so trying both is safe rather than ambiguous."""
+    primary = "%Y-%d-%m_%H-%M-%S" if _local_date_order() == "DM" else "%Y-%m-%d_%H-%M-%S"
+    other = "%Y-%m-%d_%H-%M-%S" if primary.startswith("%Y-%d") else "%Y-%d-%m_%H-%M-%S"
+    return [primary, other]
+
+
+def find_archive_dirs(root):
+    """Every directory literally named `archive` found anywhere under
+    `root` (there can be several — one per resource directory, plus one
+    under each course's own `rubrics/` subfolder)."""
+    found = []
+    for dirpath, dirnames, _filenames in os.walk(root):
+        if os.path.basename(dirpath) == "archive":
+            found.append(dirpath)
+            dirnames[:] = []  # don't descend into an archive dir looking for nested ones
+    return sorted(found)
+
+
+def list_archived_files(archive_dirs):
+    """Every file across the given archive directories, with its archived-at
+    timestamp (parsed from the filename this tool itself writes) and the
+    "identity" it's a copy of — (archive_dir, base name, extension) — used
+    to group multiple archived copies of the same original file together.
+    Falls back to the file's mtime, and its bare filename as the identity,
+    for anything in there that doesn't match this tool's own naming
+    pattern (e.g. a file a person dropped in there by hand)."""
+    entries = []
+    for archive_dir in archive_dirs:
+        for filename in sorted(os.listdir(archive_dir)):
+            path = os.path.join(archive_dir, filename)
+            if not os.path.isfile(path):
+                continue
+            m = _ARCHIVE_FILENAME_RE.match(filename)
+            when = None
+            identity = (archive_dir, filename, "")
+            if m:
+                identity = (archive_dir, m.group("base"), m.group("ext") or "")
+                for pattern in _archive_timestamp_patterns():
+                    try:
+                        when = datetime.strptime(m.group("ts"), pattern)
+                        break
+                    except ValueError:
+                        continue
+            if when is None:
+                when = datetime.fromtimestamp(os.path.getmtime(path))
+            entries.append({"path": path, "when": when, "identity": identity})
+    return entries
+
+
+def select_for_cleanup(entries, mode, cutoff=None):
+    """Which of `entries` (from `list_archived_files`) `mode` selects for
+    deletion:
+    - "all": every entry.
+    - "keep_recent": every entry except the newest `when` per identity group
+      (so exactly one archived copy of each original file survives).
+    - "older_than": every entry with `when` before `cutoff`.
+    """
+    if mode == "all":
+        return list(entries)
+    if mode == "older_than":
+        return [e for e in entries if e["when"] < cutoff]
+    if mode == "keep_recent":
+        newest_by_identity = {}
+        for e in entries:
+            cur = newest_by_identity.get(e["identity"])
+            if cur is None or e["when"] > cur["when"]:
+                newest_by_identity[e["identity"]] = e
+        keep_paths = {e["path"] for e in newest_by_identity.values()}
+        return [e for e in entries if e["path"] not in keep_paths]
+    raise ValueError(f"unknown cleanup mode: {mode!r}")
+
+
+TIME_WINDOWS = {
+    "1": ("last day", timedelta(days=1)),
+    "2": ("last week", timedelta(weeks=1)),
+    "3": ("last month", timedelta(days=30)),
+    "4": ("last year", timedelta(days=365)),
+}
 
 
 def export_assignment_groups(c, course_id):

@@ -266,6 +266,35 @@ This follow-up only appears in `export_course`; a single-file `export`
 command never asks it, since there'd be nothing else in that run to apply
 it to.
 
+**The "Archive" choice never deletes anything on its own** — the old
+copies just pile up in `archive/` subfolders over time. To actually clear
+those out:
+
+```
+python3 -m canvas_tools.cli archive cleanup --dry-run
+python3 -m canvas_tools.cli archive cleanup
+```
+
+`--path` (default: this project's own `exports/` folder) is searched
+recursively for every directory named `archive` — there's normally more
+than one, since rubric CSVs archive into their own `rubrics/archive/`
+subfolder separately from everything else. It then asks how to clean up
+what it found:
+
+- **[A]ll** — delete every archived file.
+- **[M]ost recent** — for each original file, keep only its newest
+  archived copy and delete the rest (so you always have one fallback per
+  file, not the whole history).
+- **[T]ime** — delete archived files older than a chosen cutoff: last day,
+  week, month, or year. ("Older than" — a week means keep the last week,
+  delete anything archived before that.)
+- **[C]ancel** — leave everything alone.
+
+Either way, it prints the full list of files that would be deleted and
+requires typing `yes` before actually removing anything (`--dry-run` stops
+right after printing that list). This is a plain local file cleanup — it
+never touches Canvas.
+
 ### Rubrics: create, export, and update (CSV)
 
 Uses Canvas's own rubric CSV format — the same one behind "Import Rubric"
