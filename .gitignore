@@ -4,5 +4,12 @@
 __pycache__/
 *.pyc
 
+# Local `pip install -e .` build artifacts (see pyproject.toml)
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
 exports/*
 !exports/.gitkeep

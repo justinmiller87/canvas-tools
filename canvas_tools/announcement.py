@@ -49,7 +49,7 @@ def post_announcement(c, course_id, title, message, published=True, delayed_post
             print(f"course {course_id}: posted (id={created['id']})")
 
 
-def main():
+def main(argv=None):
     p = argparse.ArgumentParser(description="Post one announcement to multiple courses")
     p.add_argument("--courses", nargs="+", required=True, help="Canvas course IDs to post to")
     p.add_argument("--title", required=True)
@@ -61,7 +61,7 @@ def main():
     p.add_argument("--force", action="store_true", help="Update even if a same-titled announcement already exists")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--verbose", action="store_true", help="Print each course's result as it happens instead of a progress bar")
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     message = open(args.file).read() if args.file else args.message
     message = clean_html(message)

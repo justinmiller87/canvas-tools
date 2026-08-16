@@ -537,7 +537,7 @@ def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",)
             print(f"wrote {len(modules['modules'])} modules / {total_items} items -> {path}")
 
 
-def main():
+def main(argv=None):
     p = argparse.ArgumentParser(description="Export one or more Canvas courses to assignments.yaml + modules.yaml")
     course_group = p.add_mutually_exclusive_group(required=True)
     course_group.add_argument("--course", nargs="+", help="One or more Canvas course IDs to export")
@@ -567,7 +567,7 @@ def main():
         "resource. Give this to write only one. JSON files work with every `apply` command too, "
         "just without comments and without multi-line-friendly HTML.",
     )
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     if args.match and not args.all:
         p.error("--match only applies with --all")

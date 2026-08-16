@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "canvas-tools"
+version = "0.1.0"
+description = "CLI for common Canvas LMS course-setup tasks against the Canvas REST/GraphQL API"
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.28",
+    "PyYAML>=6.0",
+    "python-dotenv>=1.0",
+    "beautifulsoup4>=4.12",
+]
+
+[project.scripts]
+# The bare dispatcher — `canvas <subcommand> ...` for anything without its
+# own shortcut below.
+canvas = "canvas_tools.shortcuts:canvas"
+
+# Standalone tools — no fixed subcommand prefix to inject, so these point
+# straight at their own module's main().
+exco = "canvas_tools.export_course:main"
+annpost = "canvas_tools.announcement:main"
+
+# Per-resource shortcuts: bare name = apply, "x" suffix = export (see
+# canvas_tools/shortcuts.py and shortcuts.md for the full pattern).
+agroups = "canvas_tools.shortcuts:agroups"
+agroupsx = "canvas_tools.shortcuts:agroupsx"
+assignments = "canvas_tools.shortcuts:assignments"
+assignmentsx = "canvas_tools.shortcuts:assignmentsx"
+pages = "canvas_tools.shortcuts:pages"
+pagesx = "canvas_tools.shortcuts:pagesx"
+announcements = "canvas_tools.shortcuts:announcements"
+announcementsx = "canvas_tools.shortcuts:announcementsx"
+modules = "canvas_tools.shortcuts:modules"
+modulesx = "canvas_tools.shortcuts:modulesx"
+rubex = "canvas_tools.shortcuts:rubex"
+rubimp = "canvas_tools.shortcuts:rubimp"
+rubupd = "canvas_tools.shortcuts:rubupd"
+courses = "canvas_tools.shortcuts:courses"
+copy = "canvas_tools.shortcuts:copy"
+acleanup = "canvas_tools.shortcuts:acleanup"
+
+[tool.setuptools]
+packages = ["canvas_tools"]

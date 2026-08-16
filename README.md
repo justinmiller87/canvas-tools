@@ -27,8 +27,13 @@ Note: The .env file must be named exactly. If you have forked this, the .gitigno
 
 ### Dependencies
 
-Dependencies (`requests`, `pyyaml`, `python-dotenv`) are already installed
-in this environment.
+Dependencies (`requests`, `pyyaml`, `python-dotenv`, `beautifulsoup4`) are
+already installed in this environment. If you're setting this up somewhere
+new, `pip install -e .` from the project root installs all of them from
+`pyproject.toml` — and also registers every shortcut command (`agroups`,
+`acleanup`, `exco`, etc.) on your `PATH`, runnable bare from any directory
+without the `python3 -m canvas_tools.cli` prefix. See `shortcuts.md` for
+the full list.
 
 ## How to Use
 
@@ -278,9 +283,10 @@ python3 -m canvas_tools.cli archive cleanup
 Each course has exactly one `archive/` folder, directly inside its own
 export directory — everything gets archived there, rubric CSVs included
 (their `rubrics/` subfolder doesn't get its own separate archive). `--path`
-(default: this project's own `exports/` folder) is searched recursively for
-every directory named `archive`, so running this from the top of `exports/`
-finds every course's at once. If more than one turns up, an interactive
+(default: the current directory) is searched recursively for every
+directory named `archive` — run it from inside one course's export folder
+and only that course's archive is in scope; run it from the top of
+`exports/` and every course's is. If more than one turns up, an interactive
 checklist opens before anything else happens:
 
 ```

@@ -22,7 +22,6 @@ from canvas_tools.export_course import (
     write_with_confirmation,
     write_text_with_confirmation,
     _archive_existing,
-    _DEFAULT_OUT,
     find_archive_dirs,
     list_archived_files,
     select_for_cleanup,
@@ -1688,8 +1687,9 @@ def build_parser():
     p_archive_cleanup = sub_archive.add_parser("cleanup", help="Interactively delete old archived files")
     p_archive_cleanup.add_argument(
         "--path",
-        default=_DEFAULT_OUT,
-        help="Directory to search (recursively) for archive/ folders — default: this project's own exports/ folder",
+        default=os.getcwd(),
+        help="Directory to search (recursively) for archive/ folders — default: the current directory, "
+        "so running this from inside one course's export folder only ever touches that course's archives",
     )
     p_archive_cleanup.add_argument("--dry-run", action="store_true", help="Show what would be deleted without deleting anything")
     p_archive_cleanup.set_defaults(func=cmd_archive_cleanup)
@@ -1728,9 +1728,9 @@ def build_parser():
     return p
 
 
-def main():
+def main(argv=None):
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     c = CanvasClient()
     try:
         args.func(args, c)
