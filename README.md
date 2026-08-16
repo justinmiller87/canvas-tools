@@ -29,27 +29,84 @@ Note: The .env file must be named exactly. If you have forked this, the .gitigno
 
 The default, recommended way to set this up — keeps this project's
 dependencies isolated from everything else on your system, whether that's
-your own machine or anyone else's who picks this up:
+your own machine or anyone else's who picks this up. Creating the venv
+itself is the same everywhere (substitute `python`/`py` for `python3` if
+that's what your install provides — see the note under How to Use, below):
 
 ```
 python3 -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\activate
+```
+
+Activating it is where macOS/Linux and Windows genuinely differ:
+
+#### macOS/Linux
+
+```
+source .venv/bin/activate
+```
+
+#### Windows
+
+cmd.exe:
+
+```
+.venv\Scripts\activate.bat
+```
+
+PowerShell:
+
+```
+.venv\Scripts\Activate.ps1
+```
+
+If PowerShell blocks that with an execution-policy error, run this first
+(scoped to just the current session, not a permanent system change), then
+retry:
+
+```
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+#### Once activated
+
+Your prompt gets `(.venv)` prepended, on any platform — for example:
+
+macOS/Linux:
+
+```
+(.venv) /home/user/code/canvas_api_integration %
+```
+
+Windows (cmd.exe):
+
+```
+(.venv) C:\Users\user\code\canvas_api_integration>
+```
+
+Windows (PowerShell):
+
+```
+(.venv) PS C:\Users\user\code\canvas_api_integration>
+```
+
+From there, the rest is the same everywhere:
+
+```
 pip install -e .
 ```
 
-That last command reads `pyproject.toml` and installs everything this
-project needs (`requests`, `pyyaml`, `python-dotenv`, `beautifulsoup4`) —
-and also registers every shortcut command (`agroups`, `acleanup`, `exco`,
-etc.) on your `PATH`, runnable bare from any directory without the
-`python3 -m canvas_tools.cli` prefix. See `shortcuts.md` for the full list.
+That reads `pyproject.toml` and installs everything this project needs
+(`requests`, `pyyaml`, `python-dotenv`, `beautifulsoup4`) — and also
+registers every shortcut command (`agroups`, `acleanup`, `exco`, etc.) on
+your `PATH`, runnable bare from any directory without the `python3 -m
+canvas_tools.cli` prefix. See `shortcuts.md` for the full list.
 
-The venv only needs creating once; after that, `source .venv/bin/activate`
-(run from the project root, or give it the full path from anywhere) is
-what you need at the start of each new shell session before using any of
-these commands. You'll know it's active when your prompt shows `(.venv)`.
-Run `deactivate` (no arguments, works from any directory) when you're done
-and want your shell back to normal — that's the same `activate` script's
-doing, not something specific to this project.
+The venv only needs creating once; after that, activating it (same command
+as above, run from the project root or given its full path from anywhere)
+is what you need at the start of each new shell session before using any
+of these commands. Run `deactivate` (no arguments, same on every platform)
+when you're done and want your shell back to normal — that's the same
+`activate` script's doing, not something specific to this project.
 
 ## How to Use
 
@@ -63,8 +120,8 @@ not just the project root, since `pip install -e .` is what makes
 python3 -m canvas_tools.cli <command> ...
 ```
 
-Nothing in this toolkit is Linux-specific — it's plain Python with no
-shell-outs and no OS-specific paths, so it runs the same on macOS/Windows.
+Nothing in this toolkit is OS-specific — it's plain Python with no
+shell-outs and no OS-specific paths, so it should run the same on macOS, Windows or linux.
 The one thing to adjust is the command name itself: every example here
 uses `python3`, but a standard Windows Python install usually only
 provides `python` (or the `py` launcher) — substitute accordingly.
@@ -142,7 +199,7 @@ still lands in the right place instead of creating a stray nested
 explicitly and it resolves normally, relative to wherever you actually
 are, same as `--file` always has.
 
-**Left out, `--format` writes both `.yaml` and `.json` for every
+**Left out,** **`--format`** **writes both** **`.yaml`** **and** **`.json`** **for every
 resource** — one fetch from Canvas, two files each, so you always have
 both on disk without re-running the export. Give `--format yaml` or
 `--format json` to write only that one instead (rubrics stay CSV either
@@ -202,7 +259,7 @@ Each overwrites only the one file it targets.
 
 If everything you're applying already exists (you're just editing content),
 order doesn't matter — each command matches by name/title against whatever's
-currently live. It only matters when a file references something *by name*
+currently live. It only matters when a file references something _by name_
 that doesn't exist in Canvas yet, since that lookup happens at apply-time,
 not after everything finishes:
 
@@ -256,7 +313,9 @@ as every other export in this tool.
 answering the prompt means:
 
 - **Y**es — overwrite the file(s) in place.
+
 - **N**o (or anything else) — leave every target untouched.
+
 - **A**rchive — move the existing file(s) into an `archive/` subfolder next
   to them first (created if it doesn't exist yet), renamed with a
   timestamp reflecting your own locale's date order (e.g.
@@ -334,14 +393,17 @@ either because there was only one to begin with or because you checked
 just one from the list. It then asks how to clean up what's in the
 folder(s) in question:
 
-- **[A]ll** — delete every archived file.
-- **[M]ost recent** — for each original file, keep only its newest
+- **\[A]ll** — delete every archived file.
+
+- **\[M]ost recent** — for each original file, keep only its newest
   archived copy and delete the rest (so you always have one fallback per
   file, not the whole history).
-- **[T]ime** — delete archived files older than a chosen cutoff: last day,
+
+- **\[T]ime** — delete archived files older than a chosen cutoff: last day,
   week, month, or year. ("Older than" — a week means keep the last week,
   delete anything archived before that.)
-- **[C]ancel** — leave everything alone.
+
+- **\[C]ancel** — leave everything alone.
 
 Either way, it prints the full list of files that would be deleted and
 requires typing `yes` before actually removing anything (`--dry-run` stops
@@ -468,12 +530,12 @@ with its own file (see `examples/assignment_groups_delete.example.yaml`):
 ```yaml
 assignment_groups:
   - name: "Old Homework"
-    move_assignments_to: "Homework"   # relocate its assignments first
+    move_assignments_to: "Homework" # relocate its assignments first
 
-  - name: "Empty Leftover Group"      # nothing in it — nothing else needed
+  - name: "Empty Leftover Group" # nothing in it — nothing else needed
 
   - name: "Scrapped Unit"
-    delete_assignments: true          # delete its assignments too, permanently
+    delete_assignments: true # delete its assignments too, permanently
 ```
 
 ```
@@ -492,10 +554,12 @@ always a file error, regardless of `--dry-run`.
 
 Leaving **both** out for a non-empty group isn't a file error, though —
 it's resolved differently depending on how you're running it:
+
 - **Real run:** asked right there at the terminal — move to another group
   (picked from a numbered list of the course's other groups, not typed by
   hand), delete the assignments along with the group, or skip this one
   group and leave it alone.
+
 - **`--dry-run`:** nothing to ask, since dry-run never touches the
   keyboard — it prints an `UNRESOLVED` note for that group and leaves it
   out of the previewed plan, rather than failing the whole preview.
@@ -510,7 +574,7 @@ deleted — a group-only "yes" can't accidentally take assignments with it.
 **A third gate if the file happens to name every group that currently
 exists.** This is the same `delete` command for every resource type in
 this tool (assignment groups, assignments, pages, announcements — see
-below): if what's being deleted matches the *entire* live set — easy to
+below): if what's being deleted matches the _entire_ live set — easy to
 do by accident if a full export gets pointed at `delete` instead of a
 curated subset — typing `yes` isn't enough. It prints an explicit warning
 that nothing of that type would be left, and requires typing the course
