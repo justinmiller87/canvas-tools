@@ -980,7 +980,23 @@ def cmd_modules_apply(args, c):
     # same course-id escalation as the dedicated `delete` commands before
     # anything — including the creates below — happens.
     file_module_names = {mod["name"].strip().lower() for mod in modules}
-    modules_to_delete = [m for m in existing_modules if m["name"].strip().lower() not in file_module_names]
+
+    # `rename_from:` lets a module entry match an existing Canvas module by
+    # its old name so it gets renamed in place (same id, items, and
+    # position) instead of being deleted and recreated — Canvas's
+    # module-create endpoint always appends to the end with no way to
+    # request a slot, so without this a plain name edit would silently lose
+    # the module's position and recreate every one of its items under new
+    # ids.
+    old_name_to_new = {
+        mod["rename_from"].strip().lower(): mod["name"].strip().lower() for mod in modules if mod.get("rename_from")
+    }
+
+    def _effective_name(existing_name):
+        lowered = existing_name.strip().lower()
+        return old_name_to_new.get(lowered, lowered)
+
+    modules_to_delete = [m for m in existing_modules if _effective_name(m["name"]) not in file_module_names]
     wipes_everything = bool(existing_modules) and len(modules_to_delete) == len(existing_modules)
     if wipes_everything:
         if args.dry_run:
@@ -994,7 +1010,7 @@ def cmd_modules_apply(args, c):
     with Progress(len(existing_modules), "modules (checking for deletions)", verbose=args.verbose) as progress:
         for m in existing_modules:
             progress.step(m["name"])
-            if m["name"].strip().lower() not in file_module_names:
+            if _effective_name(m["name"]) not in file_module_names:
                 if args.dry_run:
                     print(f"[dry-run] would DELETE module (not in file): {m['name']} (id={m['id']})")
                 else:
@@ -1002,13 +1018,15 @@ def cmd_modules_apply(args, c):
                     if args.verbose:
                         print(f"deleted module (not in file): {m['name']} (id={m['id']})")
 
-    kept_existing_modules = [m for m in existing_modules if m["name"].strip().lower() in file_module_names]
+    kept_existing_modules = [m for m in existing_modules if _effective_name(m["name"]) in file_module_names]
 
     # name (lowercased) -> id, seeded with modules kept from the course so
     # `prerequisites:` can reference modules outside this YAML file too —
     # but never a module just deleted above, so a stale prerequisite
-    # reference fails loudly instead of pointing at a dead id.
-    module_ids = {m["name"].strip().lower(): m["id"] for m in kept_existing_modules}
+    # reference fails loudly instead of pointing at a dead id. Keyed by each
+    # module's *effective* (post-rename) name so later lookups by the file's
+    # `name:` value find renamed modules too.
+    module_ids = {_effective_name(m["name"]): m["id"] for m in kept_existing_modules}
 
     # Pass 1: ensure every module in the file exists, so real ids are known
     # before pass 2 resolves prerequisite names into prerequisite_module_ids.
@@ -1017,9 +1035,16 @@ def cmd_modules_apply(args, c):
         for mod in modules:
             mname = mod["name"]
             progress.step(mname)
-            match = next((m for m in kept_existing_modules if m["name"].strip().lower() == mname.strip().lower()), None)
+            match = next((m for m in kept_existing_modules if _effective_name(m["name"]) == mname.strip().lower()), None)
             if match:
-                if args.verbose:
+                if match["name"].strip().lower() != mname.strip().lower():
+                    if args.dry_run:
+                        print(f"[dry-run] would RENAME module: {match['name']!r} -> {mname!r}")
+                    else:
+                        c.put(f"courses/{args.course}/modules/{match['id']}", json={"module": {"name": mname}})
+                        if args.verbose:
+                            print(f"renamed module: {match['name']!r} -> {mname!r} (id={match['id']})")
+                elif args.verbose:
                     print(f"module exists: {mname} (id={match['id']})")
             elif args.dry_run:
                 print(f"[dry-run] would CREATE module: {mname}")
@@ -1039,16 +1064,27 @@ def cmd_modules_apply(args, c):
     # Pass 2: unlock_at / require_sequential_progress / prerequisites, now that
     # every module referenced by name (including forward references) has an id.
     with Progress(len(modules), "modules (settings)", verbose=args.verbose) as progress:
-        for mod in modules:
+        for idx, mod in enumerate(modules):
             mname = mod["name"]
             progress.step(mname)
             module_id = module_ids.get(mname.strip().lower())
             prereq_names = mod.get("prerequisites") or []
             update_fields = {
                 k: mod[k]
-                for k in ("unlock_at", "require_sequential_progress", "position", "publish_final_grade")
+                for k in ("unlock_at", "require_sequential_progress", "publish_final_grade")
                 if mod.get(k) is not None
             }
+            # The file's own row order is the only place module order lives —
+            # export_modules doesn't emit a numeric `position` field, and
+            # nothing else here ever tells Canvas where a kept module belongs.
+            # Every module below already gets a settings PUT (`published` is
+            # always present on an exported file), and any update that omits
+            # `position` risks Canvas falling back to "append at the end" —
+            # confirmed live: an otherwise-untouched module dropped to the
+            # bottom of the list after an apply that never mentioned position.
+            # Pinning position to the file's index every time makes the
+            # file's order authoritative instead of accidental.
+            update_fields["position"] = idx + 1
             if mod.get("published") is not None:
                 update_fields["published"] = mod["published"]
             elif mname.strip().lower() in newly_created:
@@ -1065,8 +1101,6 @@ def cmd_modules_apply(args, c):
                     prereq_ids.append(pid)
                 update_fields["prerequisite_module_ids"] = prereq_ids
 
-            if not update_fields:
-                continue
             if args.dry_run:
                 print(f"[dry-run] would SET on {mname!r}: {update_fields}")
                 continue

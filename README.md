@@ -578,6 +578,32 @@ first (e.g. via the assignments command) if it doesn't exist yet. `Page`
 and `File` items likewise link existing pages/files (by `page_url` /
 title). `ExternalTool` needs a `url` (the LTI launch URL).
 
+The order modules appear in the file is the order they end up in on
+Canvas — every apply sends each module's position as its row number in
+the file, so reordering rows and re-applying reorders the course.
+(Without this, any settings update to a module that didn't also restate
+its position could cause Canvas to silently drop it to the bottom of the
+list — confirmed live.)
+
+Renaming a module in the file (just editing its `name:`) is safe: add a
+`rename_from:` with the module's _old_ name and the apply matches it to the
+existing Canvas module and renames it in place via a single update, instead
+of deleting the old name and creating a new one under the new name. Without
+`rename_from`, a plain rename looks like "delete + create" to `modules
+apply` — the module gets recreated with a new id, all its items get
+recreated fresh from the file, and (per the position note above) it can only
+land wherever the create endpoint puts it before the next apply's position
+pass corrects it:
+
+```yaml
+modules:
+  - name: "Week 7 - Working with Microsoft File Systems, the Registry, and More"
+    rename_from: "Week 7 - Working with Microsoft File Systems and the Windows Registry"
+```
+
+`rename_from` is only read on the apply that performs the rename — drop it
+from the file afterward (the next export won't include it anyway).
+
 Modules themselves support `unlock_at`, `require_sequential_progress`,
 and `prerequisites` (a list of _other module names_ in this same file —
 resolved to Canvas's internal module ids automatically, including forward
