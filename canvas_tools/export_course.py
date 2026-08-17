@@ -4,6 +4,7 @@ schema used by `canvas assignments apply` / `canvas modules apply`, so a real
 built course can be inspected (or reused as a template) locally.
 """
 import argparse
+import glob
 import json
 import locale
 import os
@@ -455,6 +456,14 @@ def _course_folder_name(course_id, course_code):
     # section. "/" -> "-", " " -> "_" gives "course_10001_26-FA_XXX-100-OL01".
     safe_code = (course_code or "").replace("/", "-").replace(" ", "_")
     return f"course_{course_id}_{safe_code}" if safe_code else f"course_{course_id}"
+
+
+def find_course_export_dir(course_id, out_parent=_DEFAULT_OUT):
+    """Locate a course's export directory by id alone (no course_code, so no
+    extra API call), by globbing for `_course_folder_name`'s pattern. Returns
+    the path, or None if this course has never been exported locally."""
+    matches = glob.glob(os.path.join(out_parent, f"course_{course_id}_*"))
+    return matches[0] if matches else None
 
 
 def _ext(fmt):

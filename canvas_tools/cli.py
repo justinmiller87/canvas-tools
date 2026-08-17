@@ -2,7 +2,6 @@
 import argparse
 import contextlib
 import csv
-import glob
 import io
 import os
 import sys
@@ -27,7 +26,7 @@ from canvas_tools.export_course import (
     list_archived_files,
     select_for_cleanup,
     TIME_WINDOWS,
-    _DEFAULT_OUT,
+    find_course_export_dir,
 )
 from datetime import datetime
 from canvas_tools.progress import Progress
@@ -88,6 +87,23 @@ def _find_assignment_by_name(assignments, name):
         if a["name"].strip().lower() == name.strip().lower():
             return a
     return None
+
+
+def _resolve_rename_target(existing, finder, rename_from, value, key_field, kind, course_id):
+    """Look up `value` (a name or title) against `existing` via `finder`,
+    honoring an optional `rename_from:` to match an existing record by its
+    *old* name/title instead — so it gets renamed via a plain update,
+    instead of `value` alone both finding nothing (since nothing's named
+    the *new* value yet) and creating an unwanted duplicate. Mirrors
+    `modules apply`'s `rename_from:` for module names. Raises CanvasError
+    if rename_from is set but doesn't match anything. Returns
+    (match, is_rename).
+    """
+    match = finder(existing, rename_from or value)
+    if rename_from and not match:
+        raise CanvasError(f"{kind} {value!r}: rename_from {rename_from!r} not found in course {course_id}")
+    is_rename = bool(rename_from) and match is not None and match[key_field].strip().lower() != value.strip().lower()
+    return match, is_rename
 
 
 CHECKPOINT_LABELS = ("reply_to_topic", "reply_to_entry")
@@ -349,8 +365,7 @@ def _offer_resync(args, c, export_fn, kind, **export_kwargs):
     # the production files this prompt exists to keep in sync. Falls back to
     # --file's own directory only for a course that's never been exported
     # locally at all, so this still does something sensible then.
-    matches = sorted(glob.glob(os.path.join(_DEFAULT_OUT, f"course_{args.course}_*")))
-    directory = matches[0] if matches else os.path.dirname(args.file)
+    directory = find_course_export_dir(args.course) or os.path.dirname(args.file)
     yaml_target = os.path.join(directory, f"{kind}.yaml")
     json_target = os.path.join(directory, f"{kind}.json")
     existing_targets = [p for p in (yaml_target, json_target) if os.path.exists(p)]
@@ -671,12 +686,6 @@ def cmd_assignments_apply(args, c):
         checkpoints_spec = item.pop("checkpoints", None)
         rubric_title = item.pop("rubric", None)
         remove_rubric = item.pop("remove_rubric", False)
-        # `rename_from:` lets an entry match an existing assignment (or quiz,
-        # or discussion — all the same underlying object) by its *old* name
-        # so it gets renamed via a plain update, instead of `name` alone
-        # both finding nothing (since nothing's named the *new* name yet)
-        # and creating an unwanted duplicate. Mirrors `modules apply`'s
-        # `rename_from:` for module names.
         rename_from = item.pop("rename_from", None)
 
         if "assignment_group" in item:
@@ -697,11 +706,8 @@ def cmd_assignments_apply(args, c):
         if item.get("description"):
             item["description"] = clean_html(item["description"])
         payload = {"assignment": {k: v for k, v in item.items() if v is not None}}
-        match = _find_assignment_by_name(existing, rename_from or name)
-        if rename_from and not match:
-            raise CanvasError(f"assignment {name!r}: rename_from {rename_from!r} not found in course {args.course}")
+        match, is_rename = _resolve_rename_target(existing, _find_assignment_by_name, rename_from, name, "name", "assignment", args.course)
         if match:
-            is_rename = rename_from and match["name"].strip().lower() != name.strip().lower()
             if args.dry_run:
                 if is_rename:
                     print(f"[dry-run] would RENAME assignment {match['id']!r}: {match['name']!r} -> {name!r}")
@@ -806,8 +812,6 @@ def cmd_pages_apply(args, c):
         # elsewhere in this tool — there's no way to distinguish "clear it"
         # from "don't touch it" without breaking that rule).
         todo_date = item.pop("todo_date", None)
-        # See `assignments apply`'s `rename_from:` for the rationale — same
-        # pattern here, matched by title instead of name.
         rename_from = item.pop("rename_from", None)
         body = {k: v for k, v in item.items() if k in PAGE_FIELDS and v is not None}
         if todo_date is not None:
@@ -816,11 +820,8 @@ def cmd_pages_apply(args, c):
         if body.get("body"):
             body["body"] = clean_html(body["body"])
         payload = {"wiki_page": body}
-        match = _find_page_by_title(existing, rename_from or title)
-        if rename_from and not match:
-            raise CanvasError(f"page {title!r}: rename_from {rename_from!r} not found in course {args.course}")
+        match, is_rename = _resolve_rename_target(existing, _find_page_by_title, rename_from, title, "title", "page", args.course)
         if match:
-            is_rename = rename_from and match["title"].strip().lower() != title.strip().lower()
             if args.dry_run:
                 if is_rename:
                     print(f"[dry-run] would RENAME page {match['url']!r}: {match['title']!r} -> {title!r}")
@@ -904,18 +905,14 @@ def cmd_announcements_apply(args, c):
     for item in items:
         progress.step(item.get("title"))
         title = item["title"]
-        # See `assignments apply`'s `rename_from:` for the rationale — same
-        # pattern here, matched by title instead of name.
-        rename_from = item.get("rename_from")
+        item = dict(item)
+        rename_from = item.pop("rename_from", None)
         body = {k: v for k, v in item.items() if k in ANNOUNCEMENT_FIELDS and v is not None}
         body["is_announcement"] = True
         if body.get("message"):
             body["message"] = clean_html(body["message"])
-        match = _find_announcement_by_title(existing, rename_from or title)
-        if rename_from and not match:
-            raise CanvasError(f"announcement {title!r}: rename_from {rename_from!r} not found in course {args.course}")
+        match, is_rename = _resolve_rename_target(existing, _find_announcement_by_title, rename_from, title, "title", "announcement", args.course)
         if match:
-            is_rename = rename_from and match["title"].strip().lower() != title.strip().lower()
             if args.dry_run:
                 if is_rename:
                     print(f"[dry-run] would RENAME announcement {match['id']}: {match['title']!r} -> {title!r}")
