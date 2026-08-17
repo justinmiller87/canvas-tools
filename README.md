@@ -587,7 +587,8 @@ Define announcements in a YAML file (see
 `examples/announcements.example.yaml`, or
 `examples/announcements.example.json`). Matched by exact title
 (case-insensitive). Set `delayed_post_at` to schedule one for later
-instead of posting immediately.
+instead of posting immediately. `rename_from: "Old Title"` renames one in
+place — same pattern as `assignments apply`, see above.
 
 ```
 python3 -m canvas_tools.cli announcements apply --course 10001 --file my_announcements.yaml --dry-run
@@ -649,6 +650,22 @@ notes). Any field accepted by the Canvas Assignments API can be used
 anything Canvas's Assignments API takes will pass through even if not
 listed here). Matching for create-vs-update is by exact assignment name
 (case-insensitive) within the target course.
+
+Renaming an assignment (or quiz, or discussion — all the same underlying
+object) is safe: add a `rename_from:` with its _old_ name and the apply
+matches it to the existing assignment and renames it in place via a plain
+update, instead of `name` alone finding nothing (since nothing's named the
+_new_ name yet) and creating an unwanted duplicate — the same pattern
+`modules apply` uses for module names. A `rename_from` that doesn't match
+anything currently in the course fails loudly rather than silently
+creating a duplicate under the new name.
+
+```yaml
+assignments:
+  - name: "OLD - Quiz: Module 01"
+    rename_from: "Quiz: Module 01"
+    assignment_group: "Old Assignments"
+```
 
 Two fields are names, not raw Canvas IDs, and get resolved automatically:
 `assignment_group` (matched against the course's assignment groups —
@@ -781,6 +798,8 @@ groups**, above.
 Define pages in a YAML file (see `examples/pages.example.yaml`, or
 `examples/pages.example.json`). Matched by exact title (case-insensitive).
 `body` is raw HTML — write it directly or paste in content from elsewhere.
+`rename_from: "Old Title"` renames one in place — same pattern as
+`assignments apply`, see above.
 
 ```
 python3 -m canvas_tools.cli pages apply --course 10001 --file my_pages.yaml --dry-run

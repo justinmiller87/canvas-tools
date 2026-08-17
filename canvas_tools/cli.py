@@ -2,6 +2,7 @@
 import argparse
 import contextlib
 import csv
+import glob
 import io
 import os
 import sys
@@ -26,6 +27,7 @@ from canvas_tools.export_course import (
     list_archived_files,
     select_for_cleanup,
     TIME_WINDOWS,
+    _DEFAULT_OUT,
 )
 from datetime import datetime
 from canvas_tools.progress import Progress
@@ -340,7 +342,15 @@ def _offer_resync(args, c, export_fn, kind, **export_kwargs):
     creating a fresh .yaml, same as every other export in this tool."""
     if args.dry_run:
         return
-    directory = os.path.dirname(args.file)
+    # Resolve against the course's actual exports/course_{id}_*/ directory,
+    # not wherever --file happened to live — otherwise running an apply from
+    # a scratch/trial file (as recommended when testing changes before they
+    # touch the real export) silently resyncs a throwaway copy instead of
+    # the production files this prompt exists to keep in sync. Falls back to
+    # --file's own directory only for a course that's never been exported
+    # locally at all, so this still does something sensible then.
+    matches = sorted(glob.glob(os.path.join(_DEFAULT_OUT, f"course_{args.course}_*")))
+    directory = matches[0] if matches else os.path.dirname(args.file)
     yaml_target = os.path.join(directory, f"{kind}.yaml")
     json_target = os.path.join(directory, f"{kind}.json")
     existing_targets = [p for p in (yaml_target, json_target) if os.path.exists(p)]
@@ -661,6 +671,13 @@ def cmd_assignments_apply(args, c):
         checkpoints_spec = item.pop("checkpoints", None)
         rubric_title = item.pop("rubric", None)
         remove_rubric = item.pop("remove_rubric", False)
+        # `rename_from:` lets an entry match an existing assignment (or quiz,
+        # or discussion — all the same underlying object) by its *old* name
+        # so it gets renamed via a plain update, instead of `name` alone
+        # both finding nothing (since nothing's named the *new* name yet)
+        # and creating an unwanted duplicate. Mirrors `modules apply`'s
+        # `rename_from:` for module names.
+        rename_from = item.pop("rename_from", None)
 
         if "assignment_group" in item:
             group_name = item.pop("assignment_group")
@@ -680,10 +697,16 @@ def cmd_assignments_apply(args, c):
         if item.get("description"):
             item["description"] = clean_html(item["description"])
         payload = {"assignment": {k: v for k, v in item.items() if v is not None}}
-        match = _find_assignment_by_name(existing, name)
+        match = _find_assignment_by_name(existing, rename_from or name)
+        if rename_from and not match:
+            raise CanvasError(f"assignment {name!r}: rename_from {rename_from!r} not found in course {args.course}")
         if match:
+            is_rename = rename_from and match["name"].strip().lower() != name.strip().lower()
             if args.dry_run:
-                print(f"[dry-run] would UPDATE assignment {match['id']!r}: {name}")
+                if is_rename:
+                    print(f"[dry-run] would RENAME assignment {match['id']!r}: {match['name']!r} -> {name!r}")
+                else:
+                    print(f"[dry-run] would UPDATE assignment {match['id']!r}: {name}")
                 if checkpoints_spec:
                     print(f"[dry-run]   would UPDATE checkpoints: {[cp['tag'] for cp in checkpoints_spec]}")
                 if remove_rubric:
@@ -694,7 +717,10 @@ def cmd_assignments_apply(args, c):
             if payload["assignment"]:
                 c.put(f"courses/{args.course}/assignments/{match['id']}", json=payload)
             if args.verbose:
-                print(f"updated: {name} (id={match['id']})")
+                if is_rename:
+                    print(f"renamed: {match['name']!r} -> {name!r} (id={match['id']})")
+                else:
+                    print(f"updated: {name} (id={match['id']})")
             if checkpoints_spec:
                 _apply_discussion_checkpoints(c, args.course, match["id"], checkpoints_spec)
                 if args.verbose:
@@ -780,6 +806,9 @@ def cmd_pages_apply(args, c):
         # elsewhere in this tool — there's no way to distinguish "clear it"
         # from "don't touch it" without breaking that rule).
         todo_date = item.pop("todo_date", None)
+        # See `assignments apply`'s `rename_from:` for the rationale — same
+        # pattern here, matched by title instead of name.
+        rename_from = item.pop("rename_from", None)
         body = {k: v for k, v in item.items() if k in PAGE_FIELDS and v is not None}
         if todo_date is not None:
             body["student_todo_at"] = todo_date
@@ -787,14 +816,23 @@ def cmd_pages_apply(args, c):
         if body.get("body"):
             body["body"] = clean_html(body["body"])
         payload = {"wiki_page": body}
-        match = _find_page_by_title(existing, title)
+        match = _find_page_by_title(existing, rename_from or title)
+        if rename_from and not match:
+            raise CanvasError(f"page {title!r}: rename_from {rename_from!r} not found in course {args.course}")
         if match:
+            is_rename = rename_from and match["title"].strip().lower() != title.strip().lower()
             if args.dry_run:
-                print(f"[dry-run] would UPDATE page {match['url']!r}: {title}")
+                if is_rename:
+                    print(f"[dry-run] would RENAME page {match['url']!r}: {match['title']!r} -> {title!r}")
+                else:
+                    print(f"[dry-run] would UPDATE page {match['url']!r}: {title}")
                 continue
             c.put(f"courses/{args.course}/pages/{match['url']}", json=payload)
             if args.verbose:
-                print(f"updated: {title} (url={match['url']})")
+                if is_rename:
+                    print(f"renamed: {match['title']!r} -> {title!r} (url={match['url']})")
+                else:
+                    print(f"updated: {title} (url={match['url']})")
         else:
             if args.dry_run:
                 print(f"[dry-run] would CREATE page: {title}")
@@ -866,18 +904,30 @@ def cmd_announcements_apply(args, c):
     for item in items:
         progress.step(item.get("title"))
         title = item["title"]
+        # See `assignments apply`'s `rename_from:` for the rationale — same
+        # pattern here, matched by title instead of name.
+        rename_from = item.get("rename_from")
         body = {k: v for k, v in item.items() if k in ANNOUNCEMENT_FIELDS and v is not None}
         body["is_announcement"] = True
         if body.get("message"):
             body["message"] = clean_html(body["message"])
-        match = _find_announcement_by_title(existing, title)
+        match = _find_announcement_by_title(existing, rename_from or title)
+        if rename_from and not match:
+            raise CanvasError(f"announcement {title!r}: rename_from {rename_from!r} not found in course {args.course}")
         if match:
+            is_rename = rename_from and match["title"].strip().lower() != title.strip().lower()
             if args.dry_run:
-                print(f"[dry-run] would UPDATE announcement {match['id']}: {title}")
+                if is_rename:
+                    print(f"[dry-run] would RENAME announcement {match['id']}: {match['title']!r} -> {title!r}")
+                else:
+                    print(f"[dry-run] would UPDATE announcement {match['id']}: {title}")
                 continue
             c.put(f"courses/{args.course}/discussion_topics/{match['id']}", json=body)
             if args.verbose:
-                print(f"updated: {title} (id={match['id']})")
+                if is_rename:
+                    print(f"renamed: {match['title']!r} -> {title!r} (id={match['id']})")
+                else:
+                    print(f"updated: {title} (id={match['id']})")
         else:
             if args.dry_run:
                 print(f"[dry-run] would CREATE announcement: {title}")
