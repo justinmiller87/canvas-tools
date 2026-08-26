@@ -12,6 +12,7 @@ import yaml
 from canvas_tools.client import CanvasClient, CanvasError
 from canvas_tools.html_clean import clean_html
 from canvas_tools.rubrics import export_rubrics_csv, import_rubrics_csv, update_rubric_in_place, _parse_rubrics_csv
+from canvas_tools.submissions import download_submission_files, export_submissions, apply_submissions
 from canvas_tools.export_course import (
     export_assignment_groups,
     export_assignments,
@@ -119,20 +120,22 @@ mutation UpdateCheckpoints($input: UpdateDiscussionTopicInput!) {
 
 
 def _apply_discussion_checkpoints(c, course_id, assignment_id, checkpoints_spec):
-    """Update due dates/points on an *existing* checkpointed discussion.
+    """Update due dates/points on a checkpointed discussion — or convert an
+    existing *plain* graded discussion into one, in place.
 
-    Canvas's REST API has no endpoint for this at all — checkpoint due dates
-    only exist via the GraphQL mutation the redesigned Discussions UI uses
-    internally. That mutation requires both checkpoints (reply_to_topic and
-    reply_to_entry) in every call, so any field not given in `checkpoints_spec`
-    is filled in from the checkpoint's current live value.
+    Canvas's REST API has no endpoint for this at all — checkpoints only
+    exist via the GraphQL mutation the redesigned Discussions UI uses
+    internally (`updateDiscussionTopic` with `assignment: {forCheckpoints:
+    true}`). That same mutation also handles the plain-to-checkpointed
+    upgrade for an assignment that doesn't have sub-assignments yet —
+    confirmed live, not documented anywhere — so this no longer requires
+    checkpoints to already exist. When they don't, both `points_possible`
+    and `due_at` must be given in full for each checkpoint in
+    `checkpoints_spec` (there's no live value to fall back to yet).
     """
     current = c.get(f"courses/{course_id}/assignments/{assignment_id}", params={"include[]": "checkpoints"})
-    if not current.get("has_sub_assignments"):
-        raise CanvasError(
-            f"assignment {assignment_id} has no checkpoints yet — this tool only updates dates/points on "
-            "checkpoints that already exist (set them up once in the Canvas UI, or via course copy)"
-        )
+    if not current.get("discussion_topic"):
+        raise CanvasError(f"assignment {assignment_id} is not a discussion — checkpoints only apply to discussions")
     discussion_topic_id = current["discussion_topic"]["id"]
     current_by_tag = {cp["tag"]: cp for cp in current.get("checkpoints", [])}
     current_topic = c.get(f"courses/{course_id}/discussion_topics/{discussion_topic_id}")
@@ -308,6 +311,139 @@ def _remove_rubric_association(c, course_id, assignment_id):
         return False
     c.delete(f"courses/{course_id}/rubric_associations/{association['_id']}")
     return True
+
+
+def _course_students_by_name(c, course_id):
+    """name (lowercased sortable_name/name) -> [user_id, ...], for resolving
+    an override's `students:` list. A list, not a single id, because two
+    students can share a display name — `_resolve_override_student_ids`
+    treats more than one match as an error telling the caller to use
+    `student_ids` instead."""
+    by_name = {}
+    for u in c.get(f"courses/{course_id}/users", params={"enrollment_type[]": "student", "per_page": 100}):
+        name = (u.get("sortable_name") or u.get("name") or "").strip().lower()
+        by_name.setdefault(name, []).append(u["id"])
+    return by_name
+
+
+def _course_sections_by_name(c, course_id):
+    return {s["name"].strip().lower(): s["id"] for s in c.get(f"courses/{course_id}/sections", params={"per_page": 100})}
+
+
+def _resolve_override_student_ids(entry, students_by_name, course_id):
+    if "student_ids" in entry:
+        return list(entry["student_ids"])
+    names = entry.get("students") or []
+    if not names:
+        raise CanvasError("override entry needs student_ids, students, or section")
+    ids = []
+    for name in names:
+        matches = students_by_name.get(name.strip().lower())
+        if not matches:
+            raise CanvasError(f"student {name!r} not found in course {course_id}")
+        if len(matches) > 1:
+            raise CanvasError(f"student name {name!r} is ambiguous in course {course_id} — use student_ids instead")
+        ids.append(matches[0])
+    return ids
+
+
+def _override_identity(student_ids, section_id):
+    return ("students", frozenset(student_ids)) if student_ids else ("section", section_id)
+
+
+def _apply_assignment_overrides(c, course_id, assignment_id, overrides_spec, students_by_name, sections_by_name, dry_run=False, verbose=False):
+    """Reconcile one assignment's per-student/per-section override exceptions
+    (e.g. an early unlock date for one student) to exactly the set given in
+    `overrides_spec` — matching the "exact, complete set" convention this
+    tool uses for modules/pages: an override present in Canvas but missing
+    from the file gets deleted, one present in the file but not in Canvas
+    gets created, and one present in both gets updated if its dates/title
+    changed.
+
+    Entries exported as `unmanaged: true` (a group override, or some other
+    kind this tool doesn't understand) are skipped entirely — left alone
+    whether or not they're still present in the file — since this tool has
+    no way to recreate them if they were ever deleted.
+
+    Matched by identity (the same student set, or the same section), not by
+    Canvas's internal override id, so a hand-written override with no
+    `override_id` still matches its live counterpart correctly.
+    """
+    existing = c.get(f"courses/{course_id}/assignments/{assignment_id}/overrides", params={"per_page": 100})
+    existing_managed = [ov for ov in existing if ov.get("student_ids") or ov.get("course_section_id") is not None]
+    existing_by_identity = {
+        _override_identity(ov.get("student_ids"), ov.get("course_section_id")): ov for ov in existing_managed
+    }
+
+    desired_by_identity = {}
+    for entry in overrides_spec:
+        if entry.get("unmanaged"):
+            continue
+        section_id = None
+        student_ids = None
+        if entry.get("section"):
+            section_name = entry["section"].strip().lower()
+            section_id = sections_by_name.get(section_name)
+            if section_id is None:
+                raise CanvasError(f"section {entry['section']!r} not found in course {course_id}")
+        else:
+            student_ids = _resolve_override_student_ids(entry, students_by_name, course_id)
+        desired_by_identity[_override_identity(student_ids, section_id)] = (entry, student_ids, section_id)
+
+    for identity, ov in existing_by_identity.items():
+        if identity not in desired_by_identity:
+            label = ov.get("title") or (f"section {ov.get('course_section_id')}" if ov.get("course_section_id") else "override")
+            if dry_run:
+                print(f"[dry-run]   would DELETE override: {label}")
+                continue
+            c.delete(f"courses/{course_id}/assignments/{assignment_id}/overrides/{ov['id']}")
+            if verbose:
+                print(f"  override deleted: {label}")
+
+    for identity, (entry, student_ids, section_id) in desired_by_identity.items():
+        body = {"due_at": entry.get("due_at"), "unlock_at": entry.get("unlock_at"), "lock_at": entry.get("lock_at")}
+        if student_ids:
+            body["student_ids"] = student_ids
+            body["title"] = entry.get("title") or (f"{len(student_ids)} student" + ("" if len(student_ids) == 1 else "s"))
+        else:
+            body["course_section_id"] = section_id
+        body["unassign_item"] = bool(entry.get("unassign_item"))
+
+        existing_ov = existing_by_identity.get(identity)
+        label = body.get("title") or entry.get("section")
+        if existing_ov:
+            unchanged = all(bool(existing_ov.get(k)) == v if k == "unassign_item" else existing_ov.get(k) == v for k, v in body.items() if k != "student_ids")
+            if unchanged:
+                continue
+            if dry_run:
+                print(f"[dry-run]   would UPDATE override: {label}")
+                continue
+            c.put(f"courses/{course_id}/assignments/{assignment_id}/overrides/{existing_ov['id']}", json={"assignment_override": body})
+            if verbose:
+                print(f"  override updated: {label}")
+        else:
+            if dry_run:
+                print(f"[dry-run]   would CREATE override: {label}")
+                continue
+            c.post(f"courses/{course_id}/assignments/{assignment_id}/overrides", json={"assignment_override": body})
+            if verbose:
+                print(f"  override created: {label}")
+
+
+def _restore_assignment_dates_after_overrides(c, course_id, assignment_id, item, verbose=False):
+    """Canvas silently resets an assignment's own due_at/unlock_at/lock_at to
+    null as a side effect of creating or updating one of its overrides (via
+    POST/PUT to the /overrides endpoint) — confirmed live, not documented
+    anywhere. Since `_apply_assignment_overrides` runs after the assignment's
+    own field update, any override churn in that call can undo dates we just
+    set. Re-sending just the date fields afterward, once overrides have
+    settled, is what actually makes them stick."""
+    date_fields = {k: item[k] for k in ("due_at", "unlock_at", "lock_at") if item.get(k) is not None}
+    if not date_fields:
+        return
+    c.put(f"courses/{course_id}/assignments/{assignment_id}", json={"assignment": date_fields})
+    if verbose:
+        print(f"  dates restored after override sync: {date_fields}")
 
 
 def _find_assignment_group_by_name(groups, name):
@@ -677,6 +813,8 @@ def cmd_assignments_apply(args, c):
     assignment_groups = c.get(f"courses/{args.course}/assignment_groups", params={"per_page": 100})
     group_categories = c.get(f"courses/{args.course}/group_categories", params={"per_page": 100})
     rubrics = c.get(f"courses/{args.course}/rubrics", params={"per_page": 100})
+    students_by_name = None
+    sections_by_name = None
 
     progress = Progress(len(items), "assignments", verbose=args.verbose)
     for item in items:
@@ -684,9 +822,13 @@ def cmd_assignments_apply(args, c):
         name = item["name"]
         item = dict(item)
         checkpoints_spec = item.pop("checkpoints", None)
+        overrides_spec = item.pop("overrides", None)
         rubric_title = item.pop("rubric", None)
         remove_rubric = item.pop("remove_rubric", False)
         rename_from = item.pop("rename_from", None)
+        if overrides_spec is not None and students_by_name is None:
+            students_by_name = _course_students_by_name(c, args.course)
+            sections_by_name = _course_sections_by_name(c, args.course)
 
         if "assignment_group" in item:
             group_name = item.pop("assignment_group")
@@ -719,6 +861,13 @@ def cmd_assignments_apply(args, c):
                     print(f"[dry-run]   would REMOVE current rubric (if any)")
                 if rubric_title:
                     print(f"[dry-run]   would ATTACH rubric: {rubric_title}")
+                if overrides_spec is not None:
+                    _apply_assignment_overrides(
+                        c, args.course, match["id"], overrides_spec, students_by_name, sections_by_name, dry_run=True
+                    )
+                    date_fields = {k: item[k] for k in ("due_at", "unlock_at", "lock_at") if item.get(k) is not None}
+                    if date_fields:
+                        print(f"[dry-run]   would RESTORE dates after override sync: {date_fields}")
                 continue
             if payload["assignment"]:
                 c.put(f"courses/{args.course}/assignments/{match['id']}", json=payload)
@@ -739,6 +888,11 @@ def cmd_assignments_apply(args, c):
                 _apply_rubric_association(c, args.course, match["id"], rubric_title, rubrics, item.get("use_rubric_for_grading", False))
                 if args.verbose:
                     print(f"  rubric attached: {rubric_title}")
+            if overrides_spec is not None:
+                _apply_assignment_overrides(
+                    c, args.course, match["id"], overrides_spec, students_by_name, sections_by_name, verbose=args.verbose
+                )
+                _restore_assignment_dates_after_overrides(c, args.course, match["id"], item, verbose=args.verbose)
         else:
             if args.dry_run:
                 print(f"[dry-run] would CREATE assignment: {name}")
@@ -746,6 +900,11 @@ def cmd_assignments_apply(args, c):
                     print(f"[dry-run]   would CREATE as a checkpointed discussion: {[cp['tag'] for cp in checkpoints_spec]}")
                 if rubric_title:
                     print(f"[dry-run]   would ATTACH rubric: {rubric_title}")
+                if overrides_spec is not None:
+                    print(f"[dry-run]   would CREATE {len(overrides_spec)} override(s)")
+                    date_fields = {k: item[k] for k in ("due_at", "unlock_at", "lock_at") if item.get(k) is not None}
+                    if date_fields:
+                        print(f"[dry-run]   would RESTORE dates after override sync: {date_fields}")
                 continue
             if checkpoints_spec:
                 created_id = _create_checkpointed_discussion(c, args.course, name, item, checkpoints_spec)
@@ -760,6 +919,11 @@ def cmd_assignments_apply(args, c):
                 _apply_rubric_association(c, args.course, created_id, rubric_title, rubrics, item.get("use_rubric_for_grading", False))
                 if args.verbose:
                     print(f"  rubric attached: {rubric_title}")
+            if overrides_spec is not None:
+                _apply_assignment_overrides(
+                    c, args.course, created_id, overrides_spec, students_by_name, sections_by_name, verbose=args.verbose
+                )
+                _restore_assignment_dates_after_overrides(c, args.course, created_id, item, verbose=args.verbose)
     progress.done()
     _offer_resync(args, c, export_assignments, "assignments")
 
@@ -1204,7 +1368,9 @@ def cmd_modules_apply(args, c):
             progress.step(mname)
             module_id = module_ids.get(mname.strip().lower())
             existing_items = c.get(f"courses/{args.course}/modules/{module_id}/items", params={"per_page": 100}) if module_id else []
-            file_item_titles = {(item.get("title") or "").strip().lower() for item in mod.get("items", [])}
+            existing_items.sort(key=lambda it: it.get("position") or 0)
+            file_items = mod.get("items", [])
+            file_item_titles = {(item.get("title") or "").strip().lower() for item in file_items}
 
             for existing_item in existing_items:
                 if existing_item.get("title", "").strip().lower() not in file_item_titles:
@@ -1214,30 +1380,66 @@ def cmd_modules_apply(args, c):
                         c.delete(f"courses/{args.course}/modules/{module_id}/items/{existing_item['id']}")
                         if args.verbose:
                             print(f"  removed item (not in file): {existing_item['title']}")
+            existing_items = [
+                it for it in existing_items if it.get("title", "").strip().lower() in file_item_titles
+            ]
 
-            for item in mod.get("items", []):
+            # Reconcile both membership AND order against the file — matching
+            # by title alone (the old behavior) only ever appended new/
+            # re-titled items to the end of the module, since Canvas doesn't
+            # infer position from title matching. `current_order` tracks our
+            # best understanding of the live order as we mutate it, so each
+            # subsequent decision (already correctly placed / move existing /
+            # create new) is judged against where things actually are now,
+            # not the stale pre-sync snapshot.
+            by_title = {}
+            for it in existing_items:
+                by_title.setdefault(it.get("title", "").strip().lower(), []).append(it)
+            current_order = list(existing_items)
+
+            for idx, item in enumerate(file_items):
                 title = item.get("title")
-                if any(i.get("title", "").strip().lower() == (title or "").strip().lower() for i in existing_items):
-                    if args.verbose:
-                        print(f"  item exists, skipping: {title}")
-                    continue
-                if args.dry_run:
-                    print(f"  [dry-run] would ADD item: {title} ({item['type']})")
-                    continue
-                payload = _module_item_payload(
-                    item, existing_assignments, existing_pages, existing_quizzes, existing_discussions, existing_files
-                )
-                created_item = c.post(f"courses/{args.course}/modules/{module_id}/items", json=payload)
-                if args.verbose:
-                    print(f"  added item: {title}")
-                if item.get("published") is not None:
-                    # `published` is not accepted on item create at all (confirmed
-                    # against source — only the update endpoint handles it), so it
-                    # needs this separate follow-up PUT.
-                    c.put(
-                        f"courses/{args.course}/modules/{module_id}/items/{created_item['id']}",
-                        json={"module_item": {"published": item["published"]}},
+                key = (title or "").strip().lower()
+                desired_pos = idx + 1  # Canvas module item positions are 1-indexed
+
+                if idx < len(current_order) and current_order[idx].get("title", "").strip().lower() == key:
+                    continue  # already sitting in the right spot
+
+                match_list = by_title.get(key)
+                if match_list:
+                    existing_item = match_list.pop(0)
+                    if args.dry_run:
+                        print(f"  [dry-run] would MOVE item to position {desired_pos}: {title}")
+                    else:
+                        c.put(
+                            f"courses/{args.course}/modules/{module_id}/items/{existing_item['id']}",
+                            json={"module_item": {"position": desired_pos}},
+                        )
+                        if args.verbose:
+                            print(f"  moved item to position {desired_pos}: {title}")
+                    current_order.remove(existing_item)
+                    current_order.insert(idx, existing_item)
+                else:
+                    if args.dry_run:
+                        print(f"  [dry-run] would ADD item at position {desired_pos}: {title} ({item['type']})")
+                        current_order.insert(idx, {"title": title})
+                        continue
+                    payload = _module_item_payload(
+                        item, existing_assignments, existing_pages, existing_quizzes, existing_discussions, existing_files
                     )
+                    payload["module_item"]["position"] = desired_pos
+                    created_item = c.post(f"courses/{args.course}/modules/{module_id}/items", json=payload)
+                    if args.verbose:
+                        print(f"  added item at position {desired_pos}: {title}")
+                    if item.get("published") is not None:
+                        # `published` is not accepted on item create at all (confirmed
+                        # against source — only the update endpoint handles it), so it
+                        # needs this separate follow-up PUT.
+                        c.put(
+                            f"courses/{args.course}/modules/{module_id}/items/{created_item['id']}",
+                            json={"module_item": {"published": item["published"]}},
+                        )
+                    current_order.insert(idx, created_item)
 
     _offer_resync(args, c, export_modules, "modules")
 
@@ -1621,6 +1823,57 @@ def cmd_rubrics_update(args, c):
         print(f"updated rubric {title!r} (id={result['rubric_id']}) — detached/reattached {len(names)} assignment(s): {names}")
 
 
+def _resolve_assignment(c, course_id, name):
+    assignments = c.get(f"courses/{course_id}/assignments", params={"per_page": 100})
+    match = _find_assignment_by_name(assignments, name)
+    if not match:
+        raise CanvasError(f"assignment {name!r} not found in course {course_id}")
+    return match
+
+
+def cmd_submissions_download(args, c):
+    assignment = _resolve_assignment(c, args.course, args.assignment)
+    written = download_submission_files(c, args.course, assignment["id"], args.out, verbose=args.verbose)
+    print(f"downloaded {written} file(s) -> {args.out}/")
+
+
+def cmd_submissions_export(args, c):
+    assignment = _resolve_assignment(c, args.course, args.assignment)
+    data = export_submissions(c, args.course, assignment)
+    if write_with_confirmation(
+        data,
+        args.out,
+        header_comment=(
+            f"# Exported from course {args.course}, assignment {assignment['name']!r} — schema matches `canvas submissions apply`\n"
+            "# `comment` fields aren't included here (Canvas comments are an append-only stream, not\n"
+            "# an editable field) — add a `comment:` line under a student's entry yourself before\n"
+            "# `apply` to post a new one. Re-applying the same `comment:` twice posts it twice.\n"
+        ),
+    ):
+        print(f"wrote {len(data['submissions'])} submission(s) -> {args.out}")
+
+
+def cmd_submissions_apply(args, c):
+    with open(args.file) as f:
+        spec = yaml.safe_load(f)
+
+    entries = spec.get("submissions", spec if isinstance(spec, list) else [])
+    if not entries:
+        print("No submissions found in file.")
+        return
+
+    assignment_name = spec.get("assignment") or args.assignment
+    if not assignment_name:
+        raise CanvasError("no assignment name in file and no --assignment given")
+    assignment = _resolve_assignment(c, args.course, assignment_name)
+
+    updated = apply_submissions(c, args.course, assignment["id"], entries, dry_run=args.dry_run, verbose=args.verbose)
+    if args.dry_run:
+        print(f"[dry-run] would update {updated} submission(s)")
+    else:
+        print(f"updated {updated} submission(s)")
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="canvas", description="Canvas API helper CLI")
     sub = p.add_subparsers(dest="command", required=True)
@@ -1771,6 +2024,38 @@ def build_parser():
     p_rubrics_update.add_argument("--file", required=True, help="Path to a rubric CSV file (one rubric per file, see `rubrics export`)")
     p_rubrics_update.add_argument("--dry-run", action="store_true")
     p_rubrics_update.set_defaults(func=cmd_rubrics_update)
+
+    p_sub = sub.add_parser("submissions", help="Download, export, and grade student submissions")
+    sub_sub = p_sub.add_subparsers(dest="subcommand", required=True)
+
+    p_sub_download = sub_sub.add_parser(
+        "download", help="Download every student's attached submission file(s) for one assignment", parents=[verbose_parent]
+    )
+    p_sub_download.add_argument("--course", required=True, help="Canvas course ID")
+    p_sub_download.add_argument("--assignment", required=True, help="Assignment name (exact match)")
+    p_sub_download.add_argument("--out", required=True, help="Output directory (one subfolder per student)")
+    p_sub_download.set_defaults(func=cmd_submissions_download)
+
+    p_sub_export = sub_sub.add_parser(
+        "export", help="Export grades, rubric assessments, and comments for one assignment to a YAML file", parents=[verbose_parent]
+    )
+    p_sub_export.add_argument("--course", required=True, help="Canvas course ID")
+    p_sub_export.add_argument("--assignment", required=True, help="Assignment name (exact match)")
+    p_sub_export.add_argument("--out", required=True, help="Output YAML path")
+    p_sub_export.set_defaults(func=cmd_submissions_export)
+
+    p_sub_apply = sub_sub.add_parser(
+        "apply",
+        help="Push posted_grade / rubric_assessment / comment back to Canvas from a YAML file, one PUT per student",
+        parents=[verbose_parent],
+    )
+    p_sub_apply.add_argument("--course", required=True, help="Canvas course ID")
+    p_sub_apply.add_argument(
+        "--assignment", help="Assignment name (exact match) — optional if the file has a top-level `assignment:` key, as `export` writes"
+    )
+    p_sub_apply.add_argument("--file", required=True, help="Path to a submissions YAML file (see `submissions export`)")
+    p_sub_apply.add_argument("--dry-run", action="store_true")
+    p_sub_apply.set_defaults(func=cmd_submissions_apply)
 
     return p
 

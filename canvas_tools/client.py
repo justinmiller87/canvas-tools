@@ -62,6 +62,19 @@ class CanvasClient:
     def delete(self, path):
         return self._request("DELETE", path).json()
 
+    def download_file(self, url, dest_path):
+        """Stream a Canvas file-attachment URL straight to disk. Attachment
+        URLs already carry their own signed `verifier` query param, so the
+        session's Bearer token isn't required — but sending it too is
+        harmless and keeps this on the same authenticated session/retry
+        path as every other request."""
+        resp = self.session.get(url, stream=True)
+        if not resp.ok:
+            raise CanvasError(f"GET {url} -> {resp.status_code}: {resp.text[:500]}")
+        with open(dest_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=65536):
+                f.write(chunk)
+
     def graphql(self, query, variables=None):
         """Canvas's GraphQL endpoint. Needed for things the REST API doesn't
         expose at all — e.g. discussion checkpoint due dates, which only exist

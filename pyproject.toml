@@ -23,6 +23,7 @@ canvas = "canvas_tools.shortcuts:canvas"
 # straight at their own module's main().
 exco = "canvas_tools.export_course:main"
 annpost = "canvas_tools.announcement:main"
+a11ycheck = "canvas_tools.a11y_check:main"
 
 # Per-resource shortcuts: bare name = apply, "x" suffix = export (see
 # canvas_tools/shortcuts.py and shortcuts.md for the full pattern).
@@ -42,6 +43,9 @@ rubupd = "canvas_tools.shortcuts:rubupd"
 courses = "canvas_tools.shortcuts:courses"
 copy = "canvas_tools.shortcuts:copy"
 acleanup = "canvas_tools.shortcuts:acleanup"
+subdl = "canvas_tools.shortcuts:subdl"
+subx = "canvas_tools.shortcuts:subx"
+subapply = "canvas_tools.shortcuts:subapply"
 
 [tool.setuptools]
 packages = ["canvas_tools"]

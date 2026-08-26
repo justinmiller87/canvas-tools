@@ -28,6 +28,9 @@ Pattern: bare resource name = `apply` (the common case), `x` suffix =
 | `rubex`               | `python3 -m canvas_tools.cli rubrics export`                                                      |
 | `rubimp`              | `python3 -m canvas_tools.cli rubrics import`                                                      |
 | `rubupd`              | `python3 -m canvas_tools.cli rubrics update`                                                      |
+| `subdl`               | `python3 -m canvas_tools.cli submissions download`                                                |
+| `subx`                | `python3 -m canvas_tools.cli submissions export`                                                  |
+| `subapply`            | `python3 -m canvas_tools.cli submissions apply`                                                   |
 
 Each one is a thin wrapper defined in `canvas_tools/shortcuts.py` and
 registered via `[project.scripts]` in `pyproject.toml` — it just prepends
@@ -57,4 +60,8 @@ annpost --courses 10001 10002 --title "Midterm reminder" --message "<p>...</p>"
 
 courses
 courses --state unpublished
+
+subdl --course 10001 --assignment "Essay 1" --out submissions/essay1_files/
+subx --course 10001 --assignment "Essay 1" --out submissions/essay1.yaml
+subapply --course 10001 --file submissions/essay1.yaml --dry-run
 ```

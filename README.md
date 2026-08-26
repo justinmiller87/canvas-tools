@@ -499,6 +499,41 @@ at all. Verified live: detach → edit → reattach across three assignments
 with different `use_for_grading` values, all three came back exactly as
 they started except the rubric content itself.
 
+### Submissions: download files, export grades/comments, apply grades/comments
+
+```
+python3 -m canvas_tools.cli submissions download --course 10001 --assignment "Essay 1" --out submissions/essay1_files/
+python3 -m canvas_tools.cli submissions export --course 10001 --assignment "Essay 1" --out submissions/essay1.yaml
+python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/essay1.yaml --dry-run
+python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/essay1.yaml
+```
+
+- **`download`** saves every student's attached file(s) under
+  `<out>/<student name>_<user id>/<original filename>` — one subfolder per
+  student, so filenames that collide across students (`essay.docx` from
+  two different people) don't clobber each other. Students with a
+  text-entry-only or missing submission are skipped, there's nothing to
+  download.
+
+- **`export`** writes grades, rubric assessments, comments, and submission
+  metadata (submitted_at, late, missing, workflow_state) to YAML, keyed by
+  `user_id` (the authoritative identifier `apply` uses) with `student` kept
+  alongside for readability when hand-editing. `comment` entries aren't
+  included in the export — Canvas comments are an append-only stream with
+  no edit endpoint, so there's nothing meaningful to round-trip; add a
+  `comment:` line to a student's entry yourself before running `apply` to
+  post a new one, same as `assignment_groups`/`assignments` handle
+  create-vs-update.
+
+- **`apply`** sends one `PUT .../submissions/:user_id` per student,
+  carrying whichever of `posted_grade`, `rubric_assessment`, and `comment`
+  are present in that entry — omitted fields are left untouched on Canvas's
+  side. `rubric_assessment` entries are matched by `criterion_id` (as
+  exported), not by criterion name. Re-running `apply` on a file that still
+  has a `comment:` line posts that comment again each time — remove it
+  once it's been sent. `--assignment` is optional if the file has the
+  top-level `assignment:` key `export` writes.
+
 ### Create/update assignment groups
 
 Define assignment groups in a YAML file. Matched by exact name
@@ -693,15 +728,78 @@ replies_required}` entries (`tag` is `reply_to_topic` or `reply_to_entry`).
 Canvas's REST API can't read or write checkpoint data at all — this goes
 through the same GraphQL mutations the redesigned Discussions UI uses
 internally, confirmed via schema introspection against a live instance.
-Updating an existing checkpointed discussion's dates/points works like any
-other field (matched by name, blank checkpoint fields fall back to the
-current live value); creating a brand-new one needs both checkpoints given
-in full, since there's no live checkpoint yet to fall back to. Either way,
-`due_at`/`unlock_at`/`lock_at` on the assignment entry itself are ignored —
-Canvas rejects any date/availability field on a checkpointed discussion's
-parent assignment (confirmed live, not documented anywhere); all of that
-lives on the checkpoints. See `examples/master.example.yaml` for the full
-field reference and both the update and create shapes.
+This also covers **upgrading an existing plain (non-checkpointed) graded
+discussion in place** — point it at an existing discussion's name with a
+full `checkpoints:` list and it converts on the next apply, same GraphQL
+mutation either way (confirmed live: Canvas carries the assignment's
+current `unlock_at`/`lock_at` and any existing per-student/section
+overrides over onto the new checkpoints automatically). Updating dates/
+points on a discussion that's already checkpointed works like any other
+field (matched by name, blank checkpoint fields fall back to the current
+live value); creating a brand-new checkpointed discussion — or upgrading
+a plain one for the first time — needs both checkpoints given in full,
+since there's no live checkpoint yet to fall back to. Either way,
+`due_at`/`unlock_at`/`lock_at` on the assignment entry itself are ignored
+for a checkpointed discussion's parent assignment once it exists —
+Canvas silently accepts a PUT that includes them (no error) but never
+applies the change; all of that lives on the checkpoints instead. See
+`examples/master.example.yaml` for the full field reference and both the
+update and create shapes.
+
+**Per-student/per-section exceptions** (e.g. an early unlock date for one
+student, everyone else on the normal schedule) go through `overrides:`, a
+list of entries each targeting either specific students (`student_ids:`, or
+`students:` with display names — resolved against the course roster, and an
+error if a name is ambiguous or not found) or a whole section (`section:`,
+matched by name), plus whichever of `due_at`/`unlock_at`/`lock_at` that
+group should get instead of the assignment's own dates. `overrides:` is
+opt-in per assignment — an assignment entry with no `overrides:` key never
+touches Canvas's existing overrides at all. Once given, though, it's treated
+as the *exact, complete set* for that assignment, same convention as
+modules/pages: an override missing from the list gets deleted, a new one
+gets created, an existing one gets updated if its dates changed, matched by
+its student set or section rather than by Canvas's internal override id (so
+a hand-written override with no id still matches its live counterpart).
+`overrides: []` removes every override apply manages, leaving the base
+dates as the only ones in effect.
+
+```yaml
+assignments:
+  - name: Chapter 2 Discussion
+    overrides:
+      - students: ["Doe, Jane"]
+        unlock_at: "2026-08-25T05:00:00Z"
+        due_at: null
+        lock_at: null
+```
+
+`assignments export` writes this back out after resolving student/section
+ids to names for readability, alongside the ids themselves. One kind of
+override doesn't round-trip as editable: a group override (or any other
+kind this tool doesn't recognize) comes back as `unmanaged: true` with just
+its `override_id` — informational only, `apply` skips those entries and
+never creates, edits, or deletes the live override behind them.
+
+**Once any assignment has an override, Canvas's plain `due_at`/`unlock_at`/
+`lock_at` fields on that assignment stop meaning "the base date"** — they go
+null, or can even echo one override's own date instead (confirmed live, not
+documented anywhere). The real base ("Everyone else") date only shows up
+under `include[]=all_dates`, alongside each override's own date, each
+tagged with which audience it's for. `assignments export` (and the
+`_offer_resync` every `apply`/`delete` offers afterward) already requests
+that include and pulls the `{"base": true}` entry for the exported
+`due_at`/`unlock_at`/`lock_at` — so the file always reflects the real base
+date even when an override exists, not Canvas's masked/misleading
+single-item read. This matters most on re-apply: without it, editing
+anything else on an assignment that has an override could silently reset
+its base date to null (or to another student's override date) for
+everyone, the next time the file round-tripped through export.
+As a second layer of defense, whenever an assignment entry both sets
+`overrides:` and its own `due_at`/`unlock_at`/`lock_at`, `apply` re-sends
+just those date fields once more after the override sync finishes —
+creating or updating an override is a separate API call from the
+assignment's own field update, so this guards against Canvas processing
+them in a way that lets the later one clobber the earlier one.
 
 ```
 python3 -m canvas_tools.cli assignments apply --course 10001 --file my_assignments.yaml --dry-run
@@ -865,8 +963,9 @@ before anything happens, including creating the file's own modules.
 Define modules and their items in a YAML file (see
 `examples/modules.example.yaml`, or `examples/modules.example.json`).
 Modules are matched/created by name;
-items are matched by title — already-present ones are left alone, missing
-ones are added, and (per the above) extra ones not listed are removed.
+items are matched by title — already-present ones are left alone (or
+repositioned, see below), missing ones are added, and (per the above)
+extra ones not listed are removed.
 Supported item types: `ExternalUrl`, `SubHeader`, `Page`, `Assignment`,
 `Quiz`, `Discussion`, `File`, `ExternalTool`. Assignment/Quiz/Discussion
 items link to _existing_ content matched by title — create that content
@@ -880,6 +979,21 @@ the file, so reordering rows and re-applying reorders the course.
 (Without this, any settings update to a module that didn't also restate
 its position could cause Canvas to silently drop it to the bottom of the
 list — confirmed live.)
+
+**Item order within a module is enforced the same way, item by item.**
+Matching by title alone isn't enough to keep things in place — e.g.
+retitling a `SubHeader` (or adding a new `Assignment`/`Discussion` item
+partway through a module) used to make that item look brand-new to the
+title-matching logic, and Canvas always appends a newly-created item to
+the *end* of the module regardless of where it sits in the file
+(confirmed live — there's no way to ask the create endpoint for a
+specific position). Every apply now walks the file's item list
+position-by-position: an item already sitting where the file says it
+should is left alone, one that exists but is out of place gets a plain
+`position` PUT to move it, and only a genuinely new item gets created
+(also with an explicit `position`, not left to default to "last"). A
+run that's only fixing order shows as `would MOVE item to position N`
+in `--dry-run`, distinct from `would ADD`/`would REMOVE`.
 
 Renaming a module in the file (just editing its `name:`) is safe: add a
 `rename_from:` with the module's _old_ name and the apply matches it to the
@@ -966,3 +1080,9 @@ running.
 - `canvas_tools/client.py` has a small reusable `CanvasClient` if you want
   to script something ad hoc — `get()` auto-paginates and returns a plain
   list/dict; `post()`/`put()`/`delete()` are thin wrappers.
+
+- For converting old-format Canvas/Cognero QTI quiz exports into the New
+  Quizzes format, see the separate
+  [canvas-quiz-converter](https://github.com/justinmiller87/canvas-quiz-converter)
+  tool (kept as its own project since it's GPL-3 licensed, vs. this repo's
+  MIT license).

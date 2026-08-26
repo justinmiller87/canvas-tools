@@ -294,15 +294,74 @@ def export_assignment_groups(c, course_id):
     return {"assignment_groups": out}
 
 
+def _course_student_names_by_id(c, course_id):
+    return {
+        u["id"]: u.get("sortable_name") or u.get("name") or f"user {u['id']}"
+        for u in c.get(f"courses/{course_id}/users", params={"enrollment_type[]": "student", "per_page": 100})
+    }
+
+
+def _course_section_names_by_id(c, course_id):
+    return {s["id"]: s["name"] for s in c.get(f"courses/{course_id}/sections", params={"per_page": 100})}
+
+
+def export_assignment_overrides(c, course_id, assignment_id, students_by_id, sections_by_id):
+    """One assignment's overrides (per-student/per-section exceptions to the
+    base due/unlock/lock dates), in the shape `assignments apply` reads back.
+
+    Only student-list and section overrides are round-tripped as editable —
+    those are the two kinds this tool knows how to create/update/delete.
+    Anything else (a group override, or some other kind Canvas adds later)
+    comes back `unmanaged: true` with just its `override_id`, purely so it's
+    visible in the export; `assignments apply` skips those entries and never
+    touches the live override they came from.
+    """
+    raw = c.get(f"courses/{course_id}/assignments/{assignment_id}/overrides", params={"per_page": 100})
+    out = []
+    for ov in raw:
+        entry = {}
+        student_ids = ov.get("student_ids")
+        section_id = ov.get("course_section_id")
+        if student_ids:
+            entry["student_ids"] = student_ids
+            entry["students"] = [students_by_id.get(sid, f"user {sid}") for sid in student_ids]
+            entry["title"] = ov.get("title")
+        elif section_id is not None:
+            entry["section"] = sections_by_id.get(section_id, f"section {section_id}")
+        else:
+            entry["override_id"] = ov["id"]
+            entry["unmanaged"] = True
+            out.append(entry)
+            continue
+        entry["due_at"] = ov.get("due_at")
+        entry["unlock_at"] = ov.get("unlock_at")
+        entry["lock_at"] = ov.get("lock_at")
+        if ov.get("unassign_item"):
+            entry["unassign_item"] = True
+        out.append(entry)
+    return out
+
+
 def export_assignments(c, course_id):
+    # include[]=all_dates is required to read the base "Everyone else" due
+    # date correctly. Once an assignment has any override, Canvas's plain
+    # due_at/unlock_at/lock_at fields on the assignment object go null (or,
+    # worse, can echo an override's own dates) instead of reflecting the
+    # base assignment's actual dates — confirmed live, not documented
+    # anywhere. all_dates carries every audience (each override, plus a
+    # {"base": true, "title": "Everyone else"} entry) with its own correct
+    # dates, which is what we actually want exported for the base fields.
     assignments = c.get(
-        f"courses/{course_id}/assignments", params={"per_page": 100, "include[]": "checkpoints"}
+        f"courses/{course_id}/assignments",
+        params={"per_page": 100, "include[]": ["checkpoints", "all_dates"]},
     )
     assignments.sort(key=lambda a: (a.get("position") or 0))
 
     discussions_by_id = {d["id"]: d for d in c.get(f"courses/{course_id}/discussion_topics", params={"per_page": 100})}
     group_names_by_id = {g["id"]: g["name"] for g in c.get(f"courses/{course_id}/assignment_groups", params={"per_page": 100})}
     category_names_by_id = {g["id"]: g["name"] for g in c.get(f"courses/{course_id}/group_categories", params={"per_page": 100})}
+    students_by_id = None
+    sections_by_id = None
 
     out = []
     for a in assignments:
@@ -314,6 +373,15 @@ def export_assignments(c, course_id):
             if field == "description" and val:
                 val = LiteralStr(clean_html(val))
             item[field] = val
+
+        if a.get("has_overrides"):
+            base_dates = next((d for d in (a.get("all_dates") or []) if d.get("base")), None)
+            if base_dates:
+                for field in ("due_at", "unlock_at", "lock_at"):
+                    if base_dates.get(field) is not None:
+                        item[field] = base_dates[field]
+                    else:
+                        item.pop(field, None)
 
         if a.get("assignment_group_id") in group_names_by_id:
             item["assignment_group"] = group_names_by_id[a["assignment_group_id"]]
@@ -339,6 +407,12 @@ def export_assignments(c, course_id):
                 if cp.get("tag") == "reply_to_entry":
                     entry["replies_required"] = replies_required
                 item["checkpoints"].append(entry)
+
+        if a.get("has_overrides"):
+            if students_by_id is None:
+                students_by_id = _course_student_names_by_id(c, course_id)
+                sections_by_id = _course_section_names_by_id(c, course_id)
+            item["overrides"] = export_assignment_overrides(c, course_id, a["id"], students_by_id, sections_by_id)
 
         out.append(item)
     return {"assignments": out}

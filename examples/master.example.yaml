@@ -173,11 +173,28 @@ assignments:
     grade_group_students_individually: false      # optional — false (default) gives every group member the same grade; true allows per-student grade overrides
     intra_group_peer_reviews: false                # optional — true allows group members to peer-review each other
 
+  # Per-student/per-section exceptions to the base due/unlock/lock dates.
+  # `overrides:` is opt-in per assignment — an entry with no `overrides:`
+  # key never touches Canvas's existing overrides. Once given, it's the
+  # EXACT, COMPLETE set for that assignment: one missing from the list gets
+  # deleted, a new one gets created, an existing one gets updated if its
+  # dates changed — matched by student set/section, not Canvas's internal
+  # override id, so a hand-written entry with no id still matches.
+  - name: "Week 3 Discussion"                     # REQUIRED — matches an existing assignment
+    overrides:
+      - student_ids: [10000]                      # authoritative — a list, since Canvas overrides can target several students at once
+        students: ["Doe, Jane"]             # optional, informational only — for readability; ignored if student_ids is given
+        title: "1 student"                         # optional — defaults to "N student(s)" if omitted
+        due_at: null                               # any of due_at/unlock_at/lock_at, null clears that date for this group
+        unlock_at: "2026-08-25T05:00:00Z"
+        lock_at: null
+      # - section: "Section 02"                    # alternative to student_ids/students — matched by name against the course's sections
+      #   due_at: "2026-09-01T04:59:59Z"
+
 # NOT settable through `assignments apply` — documented by Canvas but out of
 # scope here, either because they're gated behind an account/course feature
 # this tool can't detect in advance, or need a whole extra subsystem to be
 # genuinely useful:
-#   assignment_overrides[]        differentiated due dates per section/student (a whole nested-object subsystem of its own)
 #   external_tool_tag_attributes  config for an "external_tool" submission type LTI launch
 #   annotatable_attachment_id     the document ID for "student_annotation" submissions
 #   ab_guid                       outcomes-alignment GUID, institution-specific

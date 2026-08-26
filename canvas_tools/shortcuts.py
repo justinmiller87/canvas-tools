@@ -85,3 +85,15 @@ def copy():
 
 def acleanup():
     _run("archive", "cleanup")
+
+
+def subdl():
+    _run("submissions", "download")
+
+
+def subx():
+    _run("submissions", "export")
+
+
+def subapply():
+    _run("submissions", "apply")
