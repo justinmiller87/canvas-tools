@@ -30,6 +30,8 @@ ASSIGNMENT_FIELDS = [
     "name",
     "description",
     "points_possible",
+    "grading_type",
+    "grading_standard_id",
     "due_at",
     "unlock_at",
     "lock_at",

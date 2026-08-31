@@ -686,6 +686,14 @@ anything Canvas's Assignments API takes will pass through even if not
 listed here). Matching for create-vs-update is by exact assignment name
 (case-insensitive) within the target course.
 
+`grading_type` controls how a grade displays/counts: `points` (default),
+`percent`, `letter_grade`, `gpa_scale` (pair either of the last two with
+`grading_standard_id` to pick which grading scheme to use), `pass_fail`
+(complete/incomplete), or `not_graded` (no grade at all — e.g. a purely
+informational item). `assignments export` includes the assignment's
+current `grading_type`/`grading_standard_id`, so a normal export → edit →
+apply round-trip picks up and can change this field like any other.
+
 Renaming an assignment (or quiz, or discussion — all the same underlying
 object) is safe: add a `rename_from:` with its _old_ name and the apply
 matches it to the existing assignment and renames it in place via a plain
