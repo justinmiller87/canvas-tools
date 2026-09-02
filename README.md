@@ -510,14 +510,26 @@ python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/
 ```
 
 - **`download`** saves every student's attached *submission* file(s) — the
-  work they turned in. A student with one file gets it saved flat into
-  `<out>/`, named `<student name>_<user id>_<original filename>` — the
-  student prefix disambiguates filenames that would otherwise collide
-  across students (`essay.docx` from two different people). A student with
-  *multiple* files instead gets their own `<out>/<student name>_<user
-  id>/` subfolder, each file kept under its original filename, unprefixed,
-  same as Canvas presented them. Students with a text-entry-only or
-  missing submission are skipped, there's nothing to download.
+  work they turned in — across every attempt they made, not just their
+  current/latest one (a resubmission can reuse the same filename on a
+  later attempt, which would otherwise silently overwrite the earlier
+  attempt's file). A subfolder is only ever created for a genuinely
+  multi-file attempt — a single-file attempt always stays flat in
+  `<out>/`, whether or not the student has multiple attempts:
+  - One attempt, one file: `<student name>_<user id>_<original
+    filename>` — the prefix disambiguates filenames that would otherwise
+    collide across students (`essay.docx` from two different people).
+  - One attempt, multiple files: `<student name>_<user id>/<original
+    filename>` — the student's own subfolder, unprefixed inside it.
+  - Multiple attempts, an attempt with one file: `<student name>_<user
+    id>_Attempt_<n>_<original filename>` — still flat, the attempt number
+    just gets worked into the filename instead.
+  - Multiple attempts, an attempt with multiple files: `<student name>_
+    <user id>/Attempt_<n>/<original filename>` — that attempt's own
+    subfolder under the student's.
+
+  Students with a text-entry-only or never-submitted assignment are
+  skipped, there's nothing to download.
 
 - **`export`** writes grades, rubric assessments, comments, and submission
   metadata (attempt, submitted_at, late, missing, workflow_state) to YAML,

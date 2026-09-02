@@ -89,49 +89,76 @@ def rubric_criteria_reference(c, course_id, assignment):
     ]
 
 
-def list_submissions(c, course_id, assignment_id):
+def list_submissions(c, course_id, assignment_id, extra_includes=None):
     """All submissions for one assignment, with user/comments/rubric/attachments
-    included in a single paginated call."""
+    included in a single paginated call. `extra_includes` adds to
+    `SUBMISSION_INCLUDES` for one call site without affecting the others
+    (e.g. `download_submission_files` alone needs `submission_history`)."""
     return c.get(
         f"courses/{course_id}/assignments/{assignment_id}/submissions",
-        params={"per_page": 100, "include[]": SUBMISSION_INCLUDES},
+        params={"per_page": 100, "include[]": SUBMISSION_INCLUDES + list(extra_includes or [])},
     )
 
 
 def download_submission_files(c, course_id, assignment_id, out_dir, verbose=False):
     """Save every file a student attached to their submission into
-    `out_dir`. A student with exactly one file gets it saved flat as
-    `<student name>_<user_id>_<original filename>` — the prefix
-    disambiguates files that would otherwise collide (two students both
-    submitting `essay.docx`). A student with MULTIPLE files (a multi-file
-    submission) instead gets their own `<student name>_<user_id>/`
-    subfolder, with each file kept under its original filename, unprefixed,
-    same as Canvas presented them. Students with no file attachments
-    (text-entry or unsubmitted) are skipped — there's nothing to download.
-    Returns the number of files written."""
-    submissions = list_submissions(c, course_id, assignment_id)
+    `out_dir`, across every attempt (not just their current/latest one) —
+    a resubmission can reuse the same filename on a later attempt, which
+    would otherwise silently overwrite the earlier attempt's file.
+
+    Subfolders are only ever created for a genuinely multi-file attempt —
+    single-file attempts always stay flat, whether or not there are
+    multiple attempts:
+    - One attempt, one file: `<student name>_<user_id>_<original
+      filename>` — the prefix disambiguates files that would otherwise
+      collide across students (two people both submitting `essay.docx`).
+    - One attempt, multiple files: `<student name>_<user_id>/<original
+      filename>` — the student's own subfolder, unprefixed inside it, same
+      as Canvas presented them.
+    - Multiple attempts, a given attempt with one file: `<student name>_
+      <user_id>_Attempt_<n>_<original filename>` — still flat, just with
+      the attempt number worked into the filename, since same-named files
+      across attempts would otherwise collide.
+    - Multiple attempts, a given attempt with multiple files: `<student
+      name>_<user_id>/Attempt_<n>/<original filename>` — that attempt's
+      own subfolder under the student's.
+
+    Students with no file attachments on any attempt (text-entry only, or
+    never submitted) are skipped — there's nothing to download. Returns
+    the number of files written."""
+    submissions = list_submissions(c, course_id, assignment_id, extra_includes=["submission_history"])
     os.makedirs(out_dir, exist_ok=True)
     downloaded = 0
     with Progress(len(submissions), "submissions", verbose=verbose) as progress:
         for s in submissions:
             user = s.get("user") or {}
             student_name = user.get("sortable_name") or user.get("name") or f"user {s.get('user_id')}"
-            attachments = s.get("attachments") or []
-            if attachments:
-                prefix = _safe_prefix(student_name, s.get("user_id"))
+            attempts = [h for h in (s.get("submission_history") or []) if h.get("attachments")]
+            if not attempts:
+                progress.step(student_name)
+                continue
+            prefix = _safe_prefix(student_name, s.get("user_id"))
+            multi_attempt = len(attempts) > 1
+            for h in attempts:
+                attachments = h["attachments"]
+                attempt_tag = f"Attempt_{h.get('attempt')}" if multi_attempt else None
                 if len(attachments) > 1:
-                    student_dir = os.path.join(out_dir, prefix)
-                    os.makedirs(student_dir, exist_ok=True)
+                    base_dir = os.path.join(out_dir, prefix, attempt_tag) if attempt_tag else os.path.join(out_dir, prefix)
+                    os.makedirs(base_dir, exist_ok=True)
+                else:
+                    base_dir = None
                 for att in attachments:
-                    dest = (
-                        os.path.join(out_dir, prefix, att["filename"])
-                        if len(attachments) > 1
-                        else os.path.join(out_dir, f"{prefix}_{att['filename']}")
-                    )
+                    if base_dir:
+                        dest = os.path.join(base_dir, att["filename"])
+                    elif attempt_tag:
+                        dest = os.path.join(out_dir, f"{prefix}_{attempt_tag}_{att['filename']}")
+                    else:
+                        dest = os.path.join(out_dir, f"{prefix}_{att['filename']}")
                     c.download_file(att["url"], dest)
                     downloaded += 1
                     if verbose:
-                        print(f"  downloaded: {student_name} -> {att['filename']}")
+                        label = f"{student_name} attempt {h.get('attempt')}" if multi_attempt else student_name
+                        print(f"  downloaded: {label} -> {att['filename']}")
             progress.step(student_name)
     return downloaded
 
