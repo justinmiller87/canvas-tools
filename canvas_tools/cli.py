@@ -4,6 +4,7 @@ import contextlib
 import csv
 import io
 import os
+import re
 import sys
 import time
 
@@ -83,9 +84,18 @@ def cmd_courses_list(args, c):
         print(f"{co['id']}\t{co.get('course_code', ''):20s}\t{co.get('name')}")
 
 
+def _normalize_whitespace(s):
+    """Collapse any run of whitespace to a single space and strip the ends —
+    Canvas titles sometimes carry a stray double space (e.g. 'Chapter 1  Writing
+    Assignment'), which is invisible when copy-pasted from the Canvas UI but
+    breaks an exact-match lookup."""
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def _find_assignment_by_name(assignments, name):
+    target = _normalize_whitespace(name).lower()
     for a in assignments:
-        if a["name"].strip().lower() == name.strip().lower():
+        if _normalize_whitespace(a["name"]).lower() == target:
             return a
     return None
 
@@ -447,8 +457,9 @@ def _restore_assignment_dates_after_overrides(c, course_id, assignment_id, item,
 
 
 def _find_assignment_group_by_name(groups, name):
+    target = _normalize_whitespace(name).lower()
     for g in groups:
-        if g["name"].strip().lower() == name.strip().lower():
+        if _normalize_whitespace(g["name"]).lower() == target:
             return g
     return None
 
@@ -943,8 +954,9 @@ def cmd_assignments_delete(args, c):
 
 
 def _find_page_by_title(pages, title):
+    target = _normalize_whitespace(title).lower()
     for p in pages:
-        if p["title"].strip().lower() == title.strip().lower():
+        if _normalize_whitespace(p["title"]).lower() == target:
             return p
     return None
 
@@ -1024,8 +1036,9 @@ def cmd_pages_delete(args, c):
 
 
 def _find_announcement_by_title(announcements, title):
+    target = _normalize_whitespace(title).lower()
     for a in announcements:
-        if a["title"].strip().lower() == title.strip().lower():
+        if _normalize_whitespace(a["title"]).lower() == target:
             return a
     return None
 
