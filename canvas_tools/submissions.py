@@ -7,10 +7,46 @@ same `PUT .../submissions/:user_id` call that posts a comment also accepts
 than three separate ones.
 """
 import os
+import zipfile
 
 from canvas_tools.progress import Progress
 
 SUBMISSION_INCLUDES = ["user", "submission_comments", "rubric_assessment", "attachments"]
+
+# Assignment `submission_types` with no actual submission content for this
+# tool to pull — a quiz's/discussion's own answers live elsewhere (the
+# quiz-submissions/discussion-entries APIs, not this one), and these three
+# have nothing at all. An assignment with any OTHER type (online_upload,
+# online_text_entry, online_url, media_recording, student_annotation, ...)
+# is kept even if it also lists one of these.
+_NO_SUBMISSION_CONTENT_TYPES = {"online_quiz", "discussion_topic", "not_graded", "none", "external_tool", "wiki_page", "on_paper"}
+
+
+def has_downloadable_submissions(assignment):
+    """True if the assignment's `submission_types` indicates students
+    actually turn in something (a file, text, url, or recording) worth
+    pulling via `submissions download`/`export`/`pull` — false for
+    quizzes, discussions, and other assignment shadow-types Canvas's
+    `/assignments` endpoint returns that have nothing of that kind. Used
+    to filter bulk pulls (`submissions pull --all`, `course export
+    --submissions`) — an explicitly-named single `--assignment` is never
+    filtered, in case someone really does want one of these."""
+    types = set(assignment.get("submission_types") or [])
+    return bool(types) and not types.issubset(_NO_SUBMISSION_CONTENT_TYPES)
+
+
+def _download_and_extract(c, url, dest):
+    """`CanvasClient.download_file`, plus: if what got downloaded is a
+    .zip (a student can zip up a multi-file project before submitting),
+    also extract it into a same-named sibling folder next to it — the zip
+    itself is kept, not deleted, in case anything about the original
+    matters (its raw bytes, a broken extraction, etc.)."""
+    c.download_file(url, dest)
+    if dest.lower().endswith(".zip"):
+        extract_dir = dest[:-4]
+        os.makedirs(extract_dir, exist_ok=True)
+        with zipfile.ZipFile(dest) as zf:
+            zf.extractall(extract_dir)
 
 
 def _safe_prefix(name, user_id):
@@ -154,7 +190,7 @@ def download_submission_files(c, course_id, assignment_id, out_dir, verbose=Fals
                         dest = os.path.join(out_dir, f"{prefix}_{attempt_tag}_{att['filename']}")
                     else:
                         dest = os.path.join(out_dir, f"{prefix}_{att['filename']}")
-                    c.download_file(att["url"], dest)
+                    _download_and_extract(c, att["url"], dest)
                     downloaded += 1
                     if verbose:
                         label = f"{student_name} attempt {h.get('attempt')}" if multi_attempt else student_name
@@ -241,7 +277,7 @@ def export_submissions(c, course_id, assignment, comment_attachments_dir=None, v
                             prefix = _safe_prefix(student_name, s.get("user_id"))
                             for a in cm_attachments:
                                 dest = os.path.join(comment_attachments_dir, f"{prefix}_{a['filename']}")
-                                c.download_file(a["url"], dest)
+                                _download_and_extract(c, a["url"], dest)
                                 downloaded += 1
                                 if verbose:
                                     print(f"  downloaded comment attachment: {student_name} -> {a['filename']}")

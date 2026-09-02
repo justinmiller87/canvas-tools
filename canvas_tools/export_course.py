@@ -17,7 +17,7 @@ from canvas_tools.client import CanvasClient, CanvasError
 from canvas_tools.html_clean import clean_html
 from canvas_tools.progress import Progress
 from canvas_tools.rubrics import export_rubrics_csv
-from canvas_tools.submissions import pull_submissions, assignment_dir_name
+from canvas_tools.submissions import pull_submissions, assignment_dir_name, has_downloadable_submissions
 
 # Derived from this file's own location, not the current working directory —
 # so the default --out always lands in this project's real exports/ folder,
@@ -638,6 +638,7 @@ def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",)
 
     if pull_all_submissions:
         assignments = c.get(f"courses/{course_id}/assignments", params={"per_page": 100})
+        assignments = [a for a in assignments if has_downloadable_submissions(a)]
         submissions_dir = os.path.join(out, "submissions")
         print(f"pulling submissions for {len(assignments)} assignment(s) -> {submissions_dir}/")
         for i, assignment in enumerate(assignments):

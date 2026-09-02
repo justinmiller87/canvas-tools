@@ -19,6 +19,7 @@ from canvas_tools.submissions import (
     apply_submissions,
     assignment_dir_name,
     pull_submissions,
+    has_downloadable_submissions,
 )
 from canvas_tools.export_course import (
     export_assignment_groups,
@@ -1900,6 +1901,7 @@ def cmd_submissions_pull(args, c):
 
     if args.all:
         assignments = c.get(f"courses/{args.course}/assignments", params={"per_page": 100})
+        assignments = [a for a in assignments if has_downloadable_submissions(a)]
         if args.match:
             needle = args.match.lower()
             matched = [a for a in assignments if needle in a["name"].lower()]

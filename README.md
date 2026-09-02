@@ -183,6 +183,15 @@ codes/names contain, not tied to any particular format — some schools'
 codes look like `26/FA XXX-100-OL01`, in which case `--match "26/FA"`
 grabs just that term, but the match itself doesn't assume that shape.
 
+`--submissions` additionally pulls every assignment's student submissions
+(files, exported YAML, comment attachments — same as `submissions pull
+--all`) into `<course>/submissions/<assignment id>_<assignment name>/`.
+Off by default; omit it and course export runs exactly as it always has.
+An assignment whose `submission_types` is a quiz, discussion, or another
+shadow-type with nothing to actually pull (`online_quiz`,
+`discussion_topic`, `external_tool`, `not_graded`, `none`, ...) is skipped
+automatically.
+
 `--out` is the _parent_ directory — each course's own subfolder is created
 underneath it automatically, named `course_<id>_<course code>` (e.g.
 `course_10001_26-FA_XXX-100-OL01`), not just the bare id. A course code
@@ -529,7 +538,10 @@ python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/
     subfolder under the student's.
 
   Students with a text-entry-only or never-submitted assignment are
-  skipped, there's nothing to download.
+  skipped, there's nothing to download. A downloaded `.zip` (e.g. a
+  student zipping up a multi-file project) is also extracted into a
+  same-named sibling folder next to it — the zip itself is kept, not
+  deleted.
 
 - **`export`** writes grades, rubric assessments, comments, and submission
   metadata (attempt, submitted_at, late, missing, workflow_state) to YAML,
@@ -570,10 +582,23 @@ python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/
   cross-reference the rubric's own CSV export. Read-only — `apply`
   ignores this key.
 
-- **`pull`** is `download` + `export` combined into one `--out` directory,
-  for when you want everything for an assignment in one place:
+- **`pull`** is `download` + `export` combined into one directory, for
+  when you want everything for an assignment in one place:
   `<out>/submission_files/` (from `download`), `<out>/submissions.yaml`
-  and `<out>/comment_attachments/` (from `export`).
+  and `<out>/comment_attachments/` (from `export`). `--out` is optional
+  here — it defaults to `<assignment id>_<assignment name>` in the
+  current directory.
+
+  `--all` pulls every assignment in the course instead of one (optionally
+  filtered by `--match`, a case-insensitive substring against each
+  assignment's name — same semantics as `exco`'s own `--match`), each
+  into its own `<id>_<name>` subfolder under `--out` (now the PARENT
+  directory, default: current directory). Either way, an assignment whose
+  `submission_types` is a quiz, discussion, or another shadow-type with no
+  actual file/text submission to pull (e.g. `online_quiz`,
+  `discussion_topic`, `external_tool`, `not_graded`, `none`) is skipped
+  automatically — this only applies to `--all`; a single assignment named
+  explicitly via `--assignment` is never skipped this way.
 
 - **`apply`** sends one `PUT .../submissions/:user_id` per student,
   carrying whichever of `posted_grade`, `rubric_assessment`, and `comment`
