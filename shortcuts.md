@@ -30,6 +30,7 @@ Pattern: bare resource name = `apply` (the common case), `x` suffix =
 | `rubupd`              | `python3 -m canvas_tools.cli rubrics update`                                                      |
 | `subdl`               | `python3 -m canvas_tools.cli submissions download`                                                |
 | `subx`                | `python3 -m canvas_tools.cli submissions export`                                                  |
+| `subpull`             | `python3 -m canvas_tools.cli submissions pull` (subdl + subx combined into one --out directory)   |
 | `subapply`            | `python3 -m canvas_tools.cli submissions apply`                                                   |
 
 Each one is a thin wrapper defined in `canvas_tools/shortcuts.py` and
@@ -63,5 +64,6 @@ courses --state unpublished
 
 subdl --course 10001 --assignment "Essay 1" --out submissions/essay1_files/
 subx --course 10001 --assignment "Essay 1" --out submissions/essay1.yaml
+subpull --course 10001 --assignment "Essay 1" --out submissions/essay1/
 subapply --course 10001 --file submissions/essay1.yaml --dry-run
 ```

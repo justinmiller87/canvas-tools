@@ -45,6 +45,7 @@ copy = "canvas_tools.shortcuts:copy"
 acleanup = "canvas_tools.shortcuts:acleanup"
 subdl = "canvas_tools.shortcuts:subdl"
 subx = "canvas_tools.shortcuts:subx"
+subpull = "canvas_tools.shortcuts:subpull"
 subapply = "canvas_tools.shortcuts:subapply"
 
 [tool.setuptools]

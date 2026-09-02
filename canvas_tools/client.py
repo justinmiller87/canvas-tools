@@ -75,6 +75,23 @@ class CanvasClient:
             for chunk in resp.iter_content(chunk_size=65536):
                 f.write(chunk)
 
+    def upload_file(self, path, file_path):
+        """Canvas's 3-step file upload handshake, scoped to whatever `path`
+        is (e.g. a submission comment's `.../comments/files` endpoint):
+        negotiate an upload target (returns `upload_url` + `upload_params`),
+        stream the file to it, then follow the redirect Canvas returns to
+        finalize. Returns the resulting file object (with `id`)."""
+        negotiate = self.post(path, json={"name": os.path.basename(file_path), "size": os.path.getsize(file_path)})
+        with open(file_path, "rb") as f:
+            resp = self.session.post(
+                negotiate["upload_url"], data=negotiate.get("upload_params") or {}, files={"file": f}, allow_redirects=False
+            )
+        if resp.status_code in (301, 302, 303, 307, 308):
+            resp = self.session.get(resp.headers["Location"])
+        if not resp.ok:
+            raise CanvasError(f"upload {file_path} -> {resp.status_code}: {resp.text[:500]}")
+        return resp.json()
+
     def graphql(self, query, variables=None):
         """Canvas's GraphQL endpoint. Needed for things the REST API doesn't
         expose at all — e.g. discussion checkpoint due dates, which only exist

@@ -159,6 +159,16 @@ def _resolve_write_decision(path, policy=None):
     the actual write. Returns 'write' or 'skip'."""
     if not os.path.exists(path):
         return "write"
+    if os.path.isdir(path):
+        # `--out` here always names a file (e.g. `submissions.yaml`), not a
+        # directory — `submissions pull` is the command that takes a
+        # directory. Catch this before `_archive_existing` tries to
+        # `os.rename` the directory itself (which raises a confusing
+        # "Device or resource busy" when it's the cwd).
+        raise CanvasError(
+            f"{path!r} is a directory, not a file — pass a file path for "
+            "--out (e.g. --out submissions.yaml), not a directory"
+        )
     reply = policy.decide(path) if policy is not None else _prompt_overwrite(path)
     if reply in ("n", "no"):
         print(f"skipped {path!r}")

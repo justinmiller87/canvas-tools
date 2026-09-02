@@ -95,5 +95,9 @@ def subx():
     _run("submissions", "export")
 
 
+def subpull():
+    _run("submissions", "pull")
+
+
 def subapply():
     _run("submissions", "apply")

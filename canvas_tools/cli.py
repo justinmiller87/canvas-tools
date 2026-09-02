@@ -1839,7 +1839,9 @@ def cmd_submissions_download(args, c):
 
 def cmd_submissions_export(args, c):
     assignment = _resolve_assignment(c, args.course, args.assignment)
-    data = export_submissions(c, args.course, assignment)
+    base, _ext = os.path.splitext(args.out)
+    comment_attachments_dir = f"{base}_comment_attachments"
+    data, downloaded = export_submissions(c, args.course, assignment, comment_attachments_dir=comment_attachments_dir, verbose=args.verbose)
     if write_with_confirmation(
         data,
         args.out,
@@ -1851,6 +1853,36 @@ def cmd_submissions_export(args, c):
         ),
     ):
         print(f"wrote {len(data['submissions'])} submission(s) -> {args.out}")
+        if downloaded:
+            print(f"downloaded {downloaded} comment attachment(s) -> {comment_attachments_dir}/")
+
+
+def cmd_submissions_pull(args, c):
+    """`download` + `export` in one shot, into a single --out directory:
+    the assignment's submission files, the exported YAML, and any comment
+    attachments."""
+    assignment = _resolve_assignment(c, args.course, args.assignment)
+    os.makedirs(args.out, exist_ok=True)
+
+    written = download_submission_files(c, args.course, assignment["id"], os.path.join(args.out, "submission_files"), verbose=args.verbose)
+    print(f"downloaded {written} submission file(s) -> {args.out}/submission_files/")
+
+    comment_attachments_dir = os.path.join(args.out, "comment_attachments")
+    data, downloaded = export_submissions(c, args.course, assignment, comment_attachments_dir=comment_attachments_dir, verbose=args.verbose)
+    yaml_path = os.path.join(args.out, "submissions.yaml")
+    if write_with_confirmation(
+        data,
+        yaml_path,
+        header_comment=(
+            f"# Exported from course {args.course}, assignment {assignment['name']!r} — schema matches `canvas submissions apply`\n"
+            "# `comment` fields aren't included here (Canvas comments are an append-only stream, not\n"
+            "# an editable field) — add a `comment:` line under a student's entry yourself before\n"
+            "# `apply` to post a new one. Re-applying the same `comment:` twice posts it twice.\n"
+        ),
+    ):
+        print(f"wrote {len(data['submissions'])} submission(s) -> {yaml_path}")
+        if downloaded:
+            print(f"downloaded {downloaded} comment attachment(s) -> {comment_attachments_dir}/")
 
 
 def cmd_submissions_apply(args, c):
@@ -1872,6 +1904,11 @@ def cmd_submissions_apply(args, c):
         print(f"[dry-run] would update {updated} submission(s)")
     else:
         print(f"updated {updated} submission(s)")
+        # Unlike assignments/pages/announcements/modules apply, there's no
+        # canonical per-course filename to auto-resync here — submissions
+        # export files are named per batch (chapter1.yaml, rooney.yaml, ...),
+        # so re-syncing has to stay a manual step.
+        print("run `submissions export` (subx) again to refresh your local copy with this course's current grades/comments.")
 
 
 def build_parser():
@@ -2037,12 +2074,26 @@ def build_parser():
     p_sub_download.set_defaults(func=cmd_submissions_download)
 
     p_sub_export = sub_sub.add_parser(
-        "export", help="Export grades, rubric assessments, and comments for one assignment to a YAML file", parents=[verbose_parent]
+        "export",
+        help="Export grades, rubric assessments, and comments (+ comment attachment files) for one assignment to a YAML file",
+        parents=[verbose_parent],
     )
     p_sub_export.add_argument("--course", required=True, help="Canvas course ID")
     p_sub_export.add_argument("--assignment", required=True, help="Assignment name (exact match)")
-    p_sub_export.add_argument("--out", required=True, help="Output YAML path")
+    p_sub_export.add_argument(
+        "--out", required=True, help="Output YAML path — comment attachment files (if any) go to '<out, minus extension>_comment_attachments/'"
+    )
     p_sub_export.set_defaults(func=cmd_submissions_export)
+
+    p_sub_pull = sub_sub.add_parser(
+        "pull",
+        help="download + export combined: submission files, exported YAML, and comment attachment files, all under one --out directory",
+        parents=[verbose_parent],
+    )
+    p_sub_pull.add_argument("--course", required=True, help="Canvas course ID")
+    p_sub_pull.add_argument("--assignment", required=True, help="Assignment name (exact match)")
+    p_sub_pull.add_argument("--out", required=True, help="Output directory (submission_files/, submissions.yaml, comment_attachments/)")
+    p_sub_pull.set_defaults(func=cmd_submissions_pull)
 
     p_sub_apply = sub_sub.add_parser(
         "apply",

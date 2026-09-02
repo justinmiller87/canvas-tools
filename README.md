@@ -504,14 +504,16 @@ they started except the rubric content itself.
 ```
 python3 -m canvas_tools.cli submissions download --course 10001 --assignment "Essay 1" --out submissions/essay1_files/
 python3 -m canvas_tools.cli submissions export --course 10001 --assignment "Essay 1" --out submissions/essay1.yaml
+python3 -m canvas_tools.cli submissions pull --course 10001 --assignment "Essay 1" --out submissions/essay1/
 python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/essay1.yaml --dry-run
 python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/essay1.yaml
 ```
 
-- **`download`** saves every student's attached file(s) under
-  `<out>/<student name>_<user id>/<original filename>` — one subfolder per
-  student, so filenames that collide across students (`essay.docx` from
-  two different people) don't clobber each other. Students with a
+- **`download`** saves every student's attached *submission* file(s) — the
+  work they turned in — into the single flat folder `<out>/`, named
+  `<student name>_<user id>_<original filename>` — the student prefix
+  disambiguates filenames that would otherwise collide across students
+  (`essay.docx` from two different people). Students with a
   text-entry-only or missing submission are skipped, there's nothing to
   download.
 
@@ -525,6 +527,30 @@ python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/
   post a new one, same as `assignment_groups`/`assignments` handle
   create-vs-update.
 
+  A file attached to a *comment* (as opposed to the student's own
+  submission — see `download` above) is a separate list Canvas tracks
+  per comment. `export` downloads those too, into the single flat folder
+  `<out, minus its file extension>_comment_attachments/`, named
+  `<student name>_<user id>_<original filename>`, and lists each one's
+  filename/id under that comment's entry in the YAML for reference
+  (read-only — `apply` doesn't send it back; see `comment_attachments:`
+  below for posting new ones).
+
+  If the assignment has a rubric, the YAML also gets a top-level
+  `rubric_criteria:` list — each criterion's id, name, and max points,
+  straight from the rubric definition. This is the same `criterion_id`
+  a graded student's `rubric_assessment` uses, but available up front
+  instead of only showing up (bare, with no name) once someone's already
+  been graded — so you can write `rubric_assessment:` entries for
+  ungraded students without having to grade one by hand first or go
+  cross-reference the rubric's own CSV export. Read-only — `apply`
+  ignores this key.
+
+- **`pull`** is `download` + `export` combined into one `--out` directory,
+  for when you want everything for an assignment in one place:
+  `<out>/submission_files/` (from `download`), `<out>/submissions.yaml`
+  and `<out>/comment_attachments/` (from `export`).
+
 - **`apply`** sends one `PUT .../submissions/:user_id` per student,
   carrying whichever of `posted_grade`, `rubric_assessment`, and `comment`
   are present in that entry — omitted fields are left untouched on Canvas's
@@ -533,6 +559,13 @@ python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/
   has a `comment:` line posts that comment again each time — remove it
   once it's been sent. `--assignment` is optional if the file has the
   top-level `assignment:` key `export` writes.
+
+  `comment_attachments:` (a list of local file paths, resolved relative to
+  wherever you run the command) uploads each file via Canvas's per-comment
+  file-upload endpoint and attaches it to the same comment — it can stand
+  alone without `comment` text. Same duplication caveat as `comment:`
+  applies: re-running `apply` re-uploads and re-attaches the files, so
+  remove the field once it's been sent.
 
 ### Create/update assignment groups
 
