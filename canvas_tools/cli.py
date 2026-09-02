@@ -13,7 +13,13 @@ import yaml
 from canvas_tools.client import CanvasClient, CanvasError
 from canvas_tools.html_clean import clean_html
 from canvas_tools.rubrics import export_rubrics_csv, import_rubrics_csv, update_rubric_in_place, _parse_rubrics_csv
-from canvas_tools.submissions import download_submission_files, export_submissions, apply_submissions
+from canvas_tools.submissions import (
+    download_submission_files,
+    export_submissions,
+    apply_submissions,
+    assignment_dir_name,
+    pull_submissions,
+)
 from canvas_tools.export_course import (
     export_assignment_groups,
     export_assignments,
@@ -23,6 +29,7 @@ from canvas_tools.export_course import (
     dump_data,
     write_with_confirmation,
     write_text_with_confirmation,
+    OverwritePolicy,
     _archive_existing,
     find_archive_dirs,
     list_archived_files,
@@ -832,6 +839,7 @@ def cmd_assignments_apply(args, c):
         progress.step(item.get("name"))
         name = item["name"]
         item = dict(item)
+        item.pop("id", None)  # read-only, written by export purely for `--assignment <id>` lookups
         checkpoints_spec = item.pop("checkpoints", None)
         overrides_spec = item.pop("overrides", None)
         rubric_title = item.pop("rubric", None)
@@ -1837,6 +1845,8 @@ def cmd_rubrics_update(args, c):
 
 
 def _resolve_assignment(c, course_id, name):
+    if str(name).strip().isdigit():
+        return c.get(f"courses/{course_id}/assignments/{str(name).strip()}")
     assignments = c.get(f"courses/{course_id}/assignments", params={"per_page": 100})
     match = _find_assignment_by_name(assignments, name)
     if not match:
@@ -1871,31 +1881,46 @@ def cmd_submissions_export(args, c):
 
 
 def cmd_submissions_pull(args, c):
-    """`download` + `export` in one shot, into a single --out directory:
-    the assignment's submission files, the exported YAML, and any comment
-    attachments."""
+    """`download` + `export` in one shot: the assignment's submission
+    files, the exported YAML, and any comment attachments.
+
+    Single-assignment mode: `--out`, if given, is the exact target
+    directory; if omitted, defaults to `<assignment name>_<id>` in the
+    current directory (see `assignment_dir_name`).
+
+    `--all` mode: pulls every assignment in the course (optionally
+    filtered by `--match`, a case-insensitive substring against each
+    assignment's name), each into its own `<assignment name>_<id>`
+    subfolder under `--out` (the PARENT directory here — defaults to the
+    current directory if omitted)."""
+    if args.assignment and args.all:
+        raise CanvasError("--assignment and --all are mutually exclusive")
+    if args.match and not args.all:
+        raise CanvasError("--match only applies with --all")
+
+    if args.all:
+        assignments = c.get(f"courses/{args.course}/assignments", params={"per_page": 100})
+        if args.match:
+            needle = args.match.lower()
+            matched = [a for a in assignments if needle in a["name"].lower()]
+            print(f"matched {len(matched)}/{len(assignments)} assignments against {args.match!r}")
+            assignments = matched
+        if not assignments:
+            print("No assignments found.")
+            return
+        parent = args.out or "."
+        policy = OverwritePolicy()
+        for i, assignment in enumerate(assignments):
+            if len(assignments) > 1:
+                print(f"\n[{i + 1}/{len(assignments)}] {assignment['name']}")
+            pull_submissions(c, args.course, assignment, os.path.join(parent, assignment_dir_name(assignment)), verbose=args.verbose, policy=policy)
+        return
+
+    if not args.assignment:
+        raise CanvasError("--assignment is required unless --all is given")
     assignment = _resolve_assignment(c, args.course, args.assignment)
-    os.makedirs(args.out, exist_ok=True)
-
-    written = download_submission_files(c, args.course, assignment["id"], os.path.join(args.out, "submission_files"), verbose=args.verbose)
-    print(f"downloaded {written} submission file(s) -> {args.out}/submission_files/")
-
-    comment_attachments_dir = os.path.join(args.out, "comment_attachments")
-    data, downloaded = export_submissions(c, args.course, assignment, comment_attachments_dir=comment_attachments_dir, verbose=args.verbose)
-    yaml_path = os.path.join(args.out, "submissions.yaml")
-    if write_with_confirmation(
-        data,
-        yaml_path,
-        header_comment=(
-            f"# Exported from course {args.course}, assignment {assignment['name']!r} — schema matches `canvas submissions apply`\n"
-            "# `comment` fields aren't included here (Canvas comments are an append-only stream, not\n"
-            "# an editable field) — add a `comment:` line under a student's entry yourself before\n"
-            "# `apply` to post a new one. Re-applying the same `comment:` twice posts it twice.\n"
-        ),
-    ):
-        print(f"wrote {len(data['submissions'])} submission(s) -> {yaml_path}")
-        if downloaded:
-            print(f"downloaded {downloaded} comment attachment(s) -> {comment_attachments_dir}/")
+    out_dir = args.out or assignment_dir_name(assignment)
+    pull_submissions(c, args.course, assignment, out_dir, verbose=args.verbose)
 
 
 def cmd_submissions_apply(args, c):
@@ -2100,12 +2125,21 @@ def build_parser():
 
     p_sub_pull = sub_sub.add_parser(
         "pull",
-        help="download + export combined: submission files, exported YAML, and comment attachment files, all under one --out directory",
+        help="download + export combined: submission files, exported YAML, and comment attachment files, all under one directory",
         parents=[verbose_parent],
     )
     p_sub_pull.add_argument("--course", required=True, help="Canvas course ID")
-    p_sub_pull.add_argument("--assignment", required=True, help="Assignment name (exact match)")
-    p_sub_pull.add_argument("--out", required=True, help="Output directory (submission_files/, submissions.yaml, comment_attachments/)")
+    p_sub_pull.add_argument("--assignment", help="Assignment name (exact match) — required unless --all is given")
+    p_sub_pull.add_argument("--all", action="store_true", help="Pull every assignment in the course instead of one")
+    p_sub_pull.add_argument(
+        "--match", help="Only with --all: case-insensitive substring to match against each assignment's name"
+    )
+    p_sub_pull.add_argument(
+        "--out",
+        help="Output directory (submission_files/, submissions.yaml, comment_attachments/). Default: "
+        "'<assignment name>_<id>' in the current directory. With --all, this is instead the PARENT "
+        "directory each assignment's own '<name>_<id>' subfolder is created under (default: current directory).",
+    )
     p_sub_pull.set_defaults(func=cmd_submissions_pull)
 
     p_sub_apply = sub_sub.add_parser(

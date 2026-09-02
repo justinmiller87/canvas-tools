@@ -17,6 +17,7 @@ from canvas_tools.client import CanvasClient, CanvasError
 from canvas_tools.html_clean import clean_html
 from canvas_tools.progress import Progress
 from canvas_tools.rubrics import export_rubrics_csv
+from canvas_tools.submissions import pull_submissions, assignment_dir_name
 
 # Derived from this file's own location, not the current working directory —
 # so the default --out always lands in this project's real exports/ folder,
@@ -297,7 +298,7 @@ def export_assignment_groups(c, course_id):
     groups.sort(key=lambda g: (g.get("position") or 0))
     out = []
     for g in groups:
-        item = {"name": g["name"]}
+        item = {"id": g["id"], "name": g["name"]}
         if g.get("position") is not None:
             item["position"] = g["position"]
         if g.get("group_weight"):
@@ -377,7 +378,11 @@ def export_assignments(c, course_id):
 
     out = []
     for a in assignments:
-        item = {}
+        # Read-only, like `attachments:`/`rubric_criteria:` elsewhere — `apply` matches
+        # by `name`, not `id`, so this is here purely so the id is visible for use with
+        # `--assignment <id>` on submissions download/export/pull/apply without needing
+        # to look it up separately.
+        item = {"id": a["id"]}
         for field in ASSIGNMENT_FIELDS:
             val = a.get(field)
             if val is None:
@@ -436,7 +441,7 @@ def export_pages(c, course_id, verbose=False):
     with Progress(len(pages), "pages", verbose=verbose) as progress:
         for p in pages:
             full = c.get(f"courses/{course_id}/pages/{p['url']}")
-            item = {"title": full["title"]}
+            item = {"id": full["page_id"], "title": full["title"]}
             if full.get("body"):
                 item["body"] = LiteralStr(clean_html(full["body"]))
             if full.get("front_page"):
@@ -458,7 +463,7 @@ def export_announcements(c, course_id):
     anns.sort(key=lambda a: a.get("posted_at") or a.get("created_at") or "")
     out = []
     for a in anns:
-        item = {"title": a["title"]}
+        item = {"id": a["id"], "title": a["title"]}
         if a.get("message"):
             item["message"] = LiteralStr(clean_html(a["message"]))
         item["published"] = a.get("published", True)
@@ -479,7 +484,7 @@ def export_modules(c, course_id):
 
     out = []
     for m in modules:
-        mod_entry = {"name": m["name"], "published": m.get("published", True)}
+        mod_entry = {"id": m["id"], "name": m["name"], "published": m.get("published", True)}
         if m.get("unlock_at"):
             mod_entry["unlock_at"] = m["unlock_at"]
         if m.get("require_sequential_progress"):
@@ -556,7 +561,7 @@ def _ext(fmt):
     return "json" if fmt == "json" else "yaml"
 
 
-def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",), policy=None):
+def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",), policy=None, pull_all_submissions=False):
     if policy is None:
         policy = OverwritePolicy()
     course_code = c.get(f"courses/{course_id}").get("course_code")
@@ -631,6 +636,17 @@ def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",)
         ):
             print(f"wrote {len(modules['modules'])} modules / {total_items} items -> {path}")
 
+    if pull_all_submissions:
+        assignments = c.get(f"courses/{course_id}/assignments", params={"per_page": 100})
+        submissions_dir = os.path.join(out, "submissions")
+        print(f"pulling submissions for {len(assignments)} assignment(s) -> {submissions_dir}/")
+        for i, assignment in enumerate(assignments):
+            if len(assignments) > 1:
+                print(f"\n[{i + 1}/{len(assignments)}] {assignment['name']}")
+            pull_submissions(
+                c, course_id, assignment, os.path.join(submissions_dir, assignment_dir_name(assignment)), verbose=verbose, policy=policy
+            )
+
 
 def main(argv=None):
     p = argparse.ArgumentParser(description="Export one or more Canvas courses to assignments.yaml + modules.yaml")
@@ -654,6 +670,13 @@ def main(argv=None):
         "are, same as --file.",
     )
     p.add_argument("--verbose", action="store_true", help="Print each item as it's fetched instead of a progress bar")
+    p.add_argument(
+        "--submissions",
+        action="store_true",
+        help="Also pull every assignment's student submissions (files, exported YAML, comment "
+        "attachments) into '<course>/submissions/<assignment name>_<id>/', same as `submissions "
+        "pull --all`. Off by default — omit this and course export runs exactly as before.",
+    )
     p.add_argument(
         "--format",
         choices=["yaml", "json"],
@@ -696,7 +719,9 @@ def main(argv=None):
         if len(course_ids) > 1:
             print(f"\n=== [{i + 1}/{len(course_ids)}] course {course_id} ===")
         try:
-            export_one_course(c, course_id, args.out, verbose=args.verbose, formats=formats, policy=policy)
+            export_one_course(
+                c, course_id, args.out, verbose=args.verbose, formats=formats, policy=policy, pull_all_submissions=args.submissions
+            )
         except CanvasError as e:
             print(f"course {course_id}: ERROR — {e}")
             failed.append(course_id)

@@ -22,6 +22,55 @@ def _safe_prefix(name, user_id):
     return f"{safe}_{user_id}" if safe else f"user_{user_id}"
 
 
+def assignment_dir_name(assignment):
+    """Sanitize an assignment's name into a filesystem-safe `<id>_<name>`
+    folder name (e.g. `928431_Module_01_-_Real-World_Exercises`) — the
+    default `submissions pull` target when `--out` isn't given, and each
+    assignment's own subfolder name under `--all`/`course export
+    --submissions`. Id first so folders sort numerically/chronologically
+    by assignment creation order rather than alphabetically by name."""
+    safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in (assignment.get("name") or "")).strip()
+    safe = safe.replace(" ", "_")
+    return f"{assignment['id']}_{safe}" if safe else str(assignment["id"])
+
+
+def pull_submissions(c, course_id, assignment, out_dir, verbose=False, policy=None):
+    """`download` + `export` combined into one `out_dir`: the assignment's
+    submission files, the exported YAML, and any comment attachments.
+    Shared by `submissions pull` (single assignment or --all) and `course
+    export --submissions`, so both call sites behave identically. `policy`
+    is an `OverwritePolicy` to share a single Y/N/A decision across a
+    multi-assignment run — see `write_with_confirmation`.
+    Returns (submission_count, downloaded_comment_attachment_count)."""
+    # Imported here, not at module level: export_course.py doesn't import
+    # anything from this module, so importing it back would be a cycle —
+    # this module is the one that has to defer instead.
+    from canvas_tools.export_course import write_with_confirmation
+
+    os.makedirs(out_dir, exist_ok=True)
+    written = download_submission_files(c, course_id, assignment["id"], os.path.join(out_dir, "submission_files"), verbose=verbose)
+    print(f"downloaded {written} submission file(s) -> {out_dir}/submission_files/")
+
+    comment_attachments_dir = os.path.join(out_dir, "comment_attachments")
+    data, downloaded = export_submissions(c, course_id, assignment, comment_attachments_dir=comment_attachments_dir, verbose=verbose)
+    yaml_path = os.path.join(out_dir, "submissions.yaml")
+    if write_with_confirmation(
+        data,
+        yaml_path,
+        header_comment=(
+            f"# Exported from course {course_id}, assignment {assignment['name']!r} — schema matches `canvas submissions apply`\n"
+            "# `comment` fields aren't included here (Canvas comments are an append-only stream, not\n"
+            "# an editable field) — add a `comment:` line under a student's entry yourself before\n"
+            "# `apply` to post a new one. Re-applying the same `comment:` twice posts it twice.\n"
+        ),
+        policy=policy,
+    ):
+        print(f"wrote {len(data['submissions'])} submission(s) -> {yaml_path}")
+        if downloaded:
+            print(f"downloaded {downloaded} comment attachment(s) -> {comment_attachments_dir}/")
+    return len(data["submissions"]), downloaded
+
+
 def rubric_criteria_reference(c, course_id, assignment):
     """The assignment's rubric criteria (id, name, max points) — the same
     `criterion_id`s that show up in a graded student's `rubric_assessment`,
@@ -50,12 +99,16 @@ def list_submissions(c, course_id, assignment_id):
 
 
 def download_submission_files(c, course_id, assignment_id, out_dir, verbose=False):
-    """Save every file a student attached to their submission into the
-    single flat folder `out_dir`, named `<student name>_<user_id>_<original
-    filename>` — the student prefix disambiguates files that would
-    otherwise collide (two students both submitting `essay.docx`). Students
-    with no file attachments (text-entry or unsubmitted) are skipped —
-    there's nothing to download. Returns the number of files written."""
+    """Save every file a student attached to their submission into
+    `out_dir`. A student with exactly one file gets it saved flat as
+    `<student name>_<user_id>_<original filename>` — the prefix
+    disambiguates files that would otherwise collide (two students both
+    submitting `essay.docx`). A student with MULTIPLE files (a multi-file
+    submission) instead gets their own `<student name>_<user_id>/`
+    subfolder, with each file kept under its original filename, unprefixed,
+    same as Canvas presented them. Students with no file attachments
+    (text-entry or unsubmitted) are skipped — there's nothing to download.
+    Returns the number of files written."""
     submissions = list_submissions(c, course_id, assignment_id)
     os.makedirs(out_dir, exist_ok=True)
     downloaded = 0
@@ -66,8 +119,15 @@ def download_submission_files(c, course_id, assignment_id, out_dir, verbose=Fals
             attachments = s.get("attachments") or []
             if attachments:
                 prefix = _safe_prefix(student_name, s.get("user_id"))
+                if len(attachments) > 1:
+                    student_dir = os.path.join(out_dir, prefix)
+                    os.makedirs(student_dir, exist_ok=True)
                 for att in attachments:
-                    dest = os.path.join(out_dir, f"{prefix}_{att['filename']}")
+                    dest = (
+                        os.path.join(out_dir, prefix, att["filename"])
+                        if len(attachments) > 1
+                        else os.path.join(out_dir, f"{prefix}_{att['filename']}")
+                    )
                     c.download_file(att["url"], dest)
                     downloaded += 1
                     if verbose:
@@ -192,6 +252,13 @@ def apply_submissions(c, course_id, assignment_id, entries, dry_run=False, verbo
     whose otherwise-identical comments weren't visible until switching
     SpeedGrader to an earlier attempt tab).
 
+    `late_policy_status` (one of Canvas's own values: "late", "missing",
+    "none", "extended") overrides Canvas's automatic late/missing
+    determination for that submission — e.g. "none" clears an
+    automatically-applied late penalty for a student whose late resubmission
+    shouldn't count against them (their first, on-time attempt is what's
+    actually being graded).
+
     Returns the number of students actually updated (or that would be, in
     dry-run)."""
     updated = 0
@@ -202,8 +269,16 @@ def apply_submissions(c, course_id, assignment_id, entries, dry_run=False, verbo
             user_id = entry["user_id"]
 
             body = {}
-            if entry.get("posted_grade") is not None:
-                body["submission"] = {"posted_grade": entry["posted_grade"]}
+            submission_fields = {
+                k: v
+                for k, v in {
+                    "posted_grade": entry.get("posted_grade"),
+                    "late_policy_status": entry.get("late_policy_status"),
+                }.items()
+                if v is not None
+            }
+            if submission_fields:
+                body["submission"] = submission_fields
             if entry.get("rubric_assessment"):
                 body["rubric_assessment"] = {
                     str(crit["criterion_id"]): {

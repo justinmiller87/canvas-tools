@@ -510,12 +510,14 @@ python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/
 ```
 
 - **`download`** saves every student's attached *submission* file(s) — the
-  work they turned in — into the single flat folder `<out>/`, named
-  `<student name>_<user id>_<original filename>` — the student prefix
-  disambiguates filenames that would otherwise collide across students
-  (`essay.docx` from two different people). Students with a
-  text-entry-only or missing submission are skipped, there's nothing to
-  download.
+  work they turned in. A student with one file gets it saved flat into
+  `<out>/`, named `<student name>_<user id>_<original filename>` — the
+  student prefix disambiguates filenames that would otherwise collide
+  across students (`essay.docx` from two different people). A student with
+  *multiple* files instead gets their own `<out>/<student name>_<user
+  id>/` subfolder, each file kept under its original filename, unprefixed,
+  same as Canvas presented them. Students with a text-entry-only or
+  missing submission are skipped, there's nothing to download.
 
 - **`export`** writes grades, rubric assessments, comments, and submission
   metadata (attempt, submitted_at, late, missing, workflow_state) to YAML,
