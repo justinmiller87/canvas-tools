@@ -518,11 +518,16 @@ python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/
 python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/essay1.yaml
 ```
 
-- **`download`** saves every student's attached *submission* file(s) — the
-  work they turned in — across every attempt they made, not just their
-  current/latest one (a resubmission can reuse the same filename on a
-  later attempt, which would otherwise silently overwrite the earlier
-  attempt's file). A subfolder is only ever created for a genuinely
+- **`download`** clears `<out>/` before writing — re-running it after a
+  student resubmits isn't additive, it's a full rebuild, since the naming
+  scheme below depends on how many attempts/files currently exist (a
+  resubmission can turn yesterday's flat file into today's `Attempt_N`-
+  tagged ones); without this, the old file(s) would just sit there next
+  to the new ones instead of being replaced. It saves every student's
+  attached *submission* file(s) — the work they turned in — across every
+  attempt they made, not just their current/latest one (a resubmission
+  can reuse the same filename on a later attempt, which would otherwise
+  silently overwrite the earlier attempt's file). A subfolder is only ever created for a genuinely
   multi-file attempt — a single-file attempt always stays flat in
   `<out>/`, whether or not the student has multiple attempts:
   - One attempt, one file: `<student name>_<user id>_<original

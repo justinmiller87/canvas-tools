@@ -7,6 +7,7 @@ same `PUT .../submissions/:user_id` call that posts a comment also accepts
 than three separate ones.
 """
 import os
+import shutil
 import zipfile
 
 from canvas_tools.progress import Progress
@@ -160,9 +161,20 @@ def download_submission_files(c, course_id, assignment_id, out_dir, verbose=Fals
       own subfolder under the student's.
 
     Students with no file attachments on any attempt (text-entry only, or
-    never submitted) are skipped — there's nothing to download. Returns
-    the number of files written."""
+    never submitted) are skipped — there's nothing to download.
+
+    `out_dir` is cleared before writing, not just written into: since the
+    naming scheme above depends on how many attempts/files exist right
+    now (a resubmission can turn a flat file into `Attempt_N`-tagged
+    ones), re-running this after a student resubmits would otherwise leave
+    the old file(s) sitting next to the new ones instead of being
+    replaced — `download_file` itself has no overwrite-protection or
+    cleanup, unlike the `.yaml` side of a pull. Returns the number of
+    files written."""
     submissions = list_submissions(c, course_id, assignment_id, extra_includes=["submission_history"])
+    if os.path.isdir(out_dir):
+        print(f"clearing {out_dir}/ (rebuilding from current Canvas state)")
+        shutil.rmtree(out_dir)
     os.makedirs(out_dir, exist_ok=True)
     downloaded = 0
     with Progress(len(submissions), "submissions", verbose=verbose) as progress:
