@@ -116,6 +116,8 @@ def export_submissions(c, course_id, assignment, comment_attachments_dir=None, v
                 "user_id": s.get("user_id"),
                 "workflow_state": s.get("workflow_state"),
             }
+            if s.get("attempt") is not None:
+                item["attempt"] = s["attempt"]
             if s.get("submitted_at"):
                 item["submitted_at"] = s["submitted_at"]
             if s.get("late"):
@@ -179,6 +181,17 @@ def apply_submissions(c, course_id, assignment_id, entries, dry_run=False, verbo
     current working directory — each is uploaded via Canvas's per-comment
     file-upload endpoint before the PUT, and can stand alone without
     `comment` text.
+
+    If the entry has an `attempt` (as `export` now includes), the comment
+    is tagged to that attempt number. Without this, a student with more
+    than one submission attempt can end up with a comment SpeedGrader
+    doesn't surface under their current attempt — Canvas leaves an
+    untagged comment's `attempt` as null, and its newer per-attempt
+    SpeedGrader view only reliably shows a comment under the specific
+    attempt it's tagged with (confirmed by two multi-attempt students
+    whose otherwise-identical comments weren't visible until switching
+    SpeedGrader to an earlier attempt tab).
+
     Returns the number of students actually updated (or that would be, in
     dry-run)."""
     updated = 0
@@ -206,6 +219,8 @@ def apply_submissions(c, course_id, assignment_id, entries, dry_run=False, verbo
                     comment["text_comment"] = entry["comment"]
                 if attachment_paths:
                     comment["file_ids"] = attachment_paths  # placeholder; resolved to real ids below (or shown as paths in dry-run)
+                if entry.get("attempt") is not None:
+                    comment["attempt"] = entry["attempt"]
                 body["comment"] = comment
 
             if not body:

@@ -518,14 +518,24 @@ python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/
   download.
 
 - **`export`** writes grades, rubric assessments, comments, and submission
-  metadata (submitted_at, late, missing, workflow_state) to YAML, keyed by
-  `user_id` (the authoritative identifier `apply` uses) with `student` kept
-  alongside for readability when hand-editing. `comment` entries aren't
-  included in the export — Canvas comments are an append-only stream with
-  no edit endpoint, so there's nothing meaningful to round-trip; add a
-  `comment:` line to a student's entry yourself before running `apply` to
-  post a new one, same as `assignment_groups`/`assignments` handle
-  create-vs-update.
+  metadata (attempt, submitted_at, late, missing, workflow_state) to YAML,
+  keyed by `user_id` (the authoritative identifier `apply` uses) with
+  `student` kept alongside for readability when hand-editing. `comment`
+  entries aren't included in the export — Canvas comments are an
+  append-only stream with no edit endpoint, so there's nothing meaningful
+  to round-trip; add a `comment:` line to a student's entry yourself before
+  running `apply` to post a new one, same as `assignment_groups`/
+  `assignments` handle create-vs-update.
+
+  `apply` tags a new `comment:` with the entry's `attempt` when present.
+  This matters for a student with more than one submission attempt: Canvas
+  leaves an untagged comment's `attempt` as null, and SpeedGrader's
+  per-attempt view can then fail to surface that comment under whichever
+  attempt you're actually viewing (it may only show up on an earlier
+  attempt tab) even though the comment is present in the data. Since
+  `export` always fills in the student's *current* attempt, exporting
+  fresh right before grading (rather than reusing a stale file across a
+  resubmission) keeps this tag correct.
 
   A file attached to a *comment* (as opposed to the student's own
   submission — see `download` above) is a separate list Canvas tracks
