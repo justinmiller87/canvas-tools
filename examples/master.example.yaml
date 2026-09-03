@@ -1,15 +1,17 @@
 # Master reference: every option each `apply` command understands, for
-# assignment groups, modules, pages, assignments, and announcements —
-# audited directly against Canvas LMS's source (the actual permitted-params
-# lists each controller uses), not just its docs, which are incomplete in a
-# few places noted below. Each command reads only its own top-level key and
-# ignores the rest, so this one file works against any of them:
+# assignment groups, modules, pages, assignments, announcements, and
+# submissions — audited directly against Canvas LMS's source (the actual
+# permitted-params lists each controller uses), not just its docs, which
+# are incomplete in a few places noted below. Each command reads only its
+# own top-level key and ignores the rest, so this one file works against
+# any of them:
 #
 #   python3 -m canvas_tools.cli assignment_groups apply --course ID --file master.example.yaml --dry-run
 #   python3 -m canvas_tools.cli assignments       apply --course ID --file master.example.yaml --dry-run
 #   python3 -m canvas_tools.cli pages             apply --course ID --file master.example.yaml --dry-run
 #   python3 -m canvas_tools.cli announcements     apply --course ID --file master.example.yaml --dry-run
 #   python3 -m canvas_tools.cli modules           apply --course ID --file master.example.yaml --dry-run
+#   python3 -m canvas_tools.cli submissions       apply --course ID --file master.example.yaml --dry-run --assignment "Essay 1"
 #
 # This is meant to be read as a reference / copied from, not run blindly —
 # the modules section below links items (Assignment/Quiz/Discussion) that
@@ -357,3 +359,55 @@ modules:
 # NOT settable through `modules apply` — module items support one Canvas
 # field this tool doesn't expose:
 #   module_item[module_id]   moves an existing item to a different module (a "move," not a create) — out of scope since this tool only ever adds new items, never repositions existing ones across modules
+
+# `submissions apply` is different from every section above in two ways:
+# nothing is ever created or deleted (a submission already exists once a
+# student is enrolled, whether or not they've turned anything in), and
+# matching is by `user_id`, not by name/title — student names aren't
+# guaranteed unique, so `user_id` is the one authoritative key every entry
+# needs. `--assignment` (name OR numeric id) is required unless the file
+# has the top-level `assignment:` key `export` writes, as here.
+assignment: "Essay 1"
+submissions:
+  - student: "Doe, Jane"                          # optional — purely for human readability when hand-editing; not read by `apply`
+    user_id: 10000                                # REQUIRED — the authoritative match key
+    posted_grade: "88"                            # optional — sets the score directly. IMPORTANT: if the assignment has use_rubric_for_grading: true AND this entry also has rubric_assessment: below, Canvas computes the posted score from the rubric total in that same request and ignores this field — send posted_grade alone, no rubric_assessment in that entry, to force an exact score (e.g. after a manual point deduction)
+    late_policy_status: none                      # optional — one of Canvas's own values: late, missing, none, extended. Overrides Canvas's automatic late/missing determination — e.g. "none" clears an auto-applied late penalty
+    attempt: 2                                    # optional — tags a new comment: to this specific submission attempt. `export` fills this in with the student's CURRENT attempt automatically; only set it by hand if targeting an attempt the file wasn't just freshly exported for (a student with more than one attempt whose comment isn't tagged can end up not showing under the attempt SpeedGrader is currently viewing — see the README's `download`/`export` notes)
+    rubric_assessment:                            # optional — list of criterion scores/feedback; entries matched by criterion_id, not name
+      - criterion_id: _1234                       # REQUIRED (per entry) — from the assignment's rubric_criteria: (see below) or a graded student's existing rubric_assessment
+        points: 18                                # optional — omit to leave that criterion's score untouched
+        comments: "Solid thesis, but the second paragraph needs a stronger transition."  # optional — per-criterion feedback shown alongside its score
+      - criterion_id: _5678
+        points: 10
+        comments: "APA formatting is correct throughout."
+    comment: |-                                   # optional — appended to the submission's comment stream (Canvas has no edit endpoint for a past comment) — re-running `apply` with the same comment: posts it again, remove it once sent
+      Nice work overall — see the rubric comments for specific feedback.
+    comment_attachments:                          # optional — local file paths, resolved relative to wherever you run the command; each is uploaded and attached to the same comment, can stand alone without comment: text above. Same re-send caveat as comment: — remove once sent
+      - "feedback/jane_doe_annotated.pdf"
+
+  # A student you're only commenting on, not grading — everything else
+  # about their existing grade/rubric is left exactly as it is.
+  - user_id: 10001
+    comment: "Please resubmit with in-text citations — I can't post a grade until sources are cited."
+
+# `rubric_criteria:` — a top-level key (like `assignment:` above), only
+# present if the assignment has a rubric attached. Written by `export` for
+# reference — the same criterion_ids a graded student's rubric_assessment
+# uses, but available up front instead of only after someone's already
+# been graded. Read-only; `apply` ignores this key entirely.
+rubric_criteria:
+  - criterion_id: _1234
+    name: "Thesis & Argument"
+    points: 20.0
+  - criterion_id: _5678
+    name: "APA Formatting"
+    points: 10.0
+
+# `export` also writes several other fields back purely for reference —
+# never read by `apply`, safe to leave in a file you're editing and
+# reapplying, or strip out, whichever's easier:
+#   workflow_state, score, grade, submitted_at, late, missing, attachments
+#     — the student's current state and submitted file(s) as of the export
+#   comments (plural, a list)   the EXISTING comment thread (read-only —
+#                                use comment:, singular, above to post a new one)

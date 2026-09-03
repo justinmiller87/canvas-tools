@@ -1,0 +1,12 @@
+# Example input for: canvas assignment_groups apply --course <ID> --file this.yaml
+#
+# Matched by exact name (case-insensitive): existing groups are updated,
+# new ones are created.
+assignment_groups:
+  - name: "Homework"
+    position: 1
+    group_weight: 30.0
+
+  - name: "Exams"
+    position: 2
+    group_weight: 70.0

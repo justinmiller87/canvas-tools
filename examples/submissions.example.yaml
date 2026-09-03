@@ -1,0 +1,23 @@
+# Example input for: canvas submissions apply --course <ID> --file this.yaml
+#
+# `user_id` is the authoritative key (student names aren't guaranteed
+# unique) — `student` is just for human readability, not read by `apply`.
+# Omit rubric_assessment/posted_grade/comment for a student you don't want
+# to touch — apply only sends whichever of those are present per entry.
+assignment: "Essay 1"
+submissions:
+  - student: "Doe, Jane"
+    user_id: 10000
+    rubric_assessment:
+      - criterion_id: _1234
+        points: 18
+        comments: "Solid thesis, but the second paragraph needs a stronger transition."
+      - criterion_id: _5678
+        points: 10
+        comments: "APA formatting is correct throughout."
+    comment: |-
+      Nice work overall — see the rubric comments for specific feedback.
+
+  - student: "Smith, Alex"
+    user_id: 10001
+    comment: "Please resubmit with in-text citations — I can't post a grade until sources are cited."

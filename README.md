@@ -510,6 +510,11 @@ they started except the rubric content itself.
 
 ### Submissions: download files, export grades/comments, apply grades/comments
 
+See `examples/submissions.example.yaml` (or `examples/submissions.example.json`
+for the same thing as JSON, or `examples/master.example.yaml` for every
+field `apply` recognizes, REQUIRED/optional, same as the other resources
+below) for an `apply` input file — the shape `export`/`pull` also write.
+
 ```
 python3 -m canvas_tools.cli submissions download --course 10001 --assignment "Essay 1" --out submissions/essay1_files/
 python3 -m canvas_tools.cli submissions export --course 10001 --assignment "Essay 1" --out submissions/essay1.yaml
@@ -623,13 +628,16 @@ python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/
 
 ### Create/update assignment groups
 
-Define assignment groups in a YAML file. Matched by exact name
-(case-insensitive): existing groups are updated, new ones are created.
-Fields: `name` (required), `position` (optional — display order), and
-`group_weight` (optional — only meaningful if the course uses weighted
-assignment groups for grading). Create these _before_ referencing them in
-an `assignments apply` file — `assignment_group:` there matches by name
-against existing groups, it doesn't create one.
+Define assignment groups in a YAML file (see
+`examples/assignment_groups.example.yaml`, or
+`examples/assignment_groups.example.json` for the same thing as JSON).
+Matched by exact name (case-insensitive): existing groups are updated, new
+ones are created. Fields: `name` (required), `position` (optional —
+display order), and `group_weight` (optional — only meaningful if the
+course uses weighted assignment groups for grading). Create these
+_before_ referencing them in an `assignments apply` file —
+`assignment_group:` there matches by name against existing groups, it
+doesn't create one.
 
 ```yaml
 assignment_groups:

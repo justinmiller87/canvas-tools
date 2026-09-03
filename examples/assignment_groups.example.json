@@ -1,0 +1,14 @@
+{
+  "assignment_groups": [
+    {
+      "name": "Homework",
+      "position": 1,
+      "group_weight": 30.0
+    },
+    {
+      "name": "Exams",
+      "position": 2,
+      "group_weight": 70.0
+    }
+  ]
+}
