@@ -142,7 +142,22 @@ assignments:
       exclude_small_matches_type: percent             # words, percent, or omit for no exclusion
       exclude_small_matches_value: 5
 
-  # Checkpointed discussion (two due dates: initial post + required replies).
+  # Plain graded discussion — a single normal due date, same as any other
+  # assignment above, no different handling needed. This is what you get by
+  # default; see the CHECKPOINTED discussion right below for the alternative
+  # (two required submissions, each with its own due date) instead of this
+  # one due_at.
+  - name: "Discussion: Week 1 Introductions"      # REQUIRED — matches an existing discussion, or names a new one to create
+    description: "<p>Introduce yourself to the class.</p>"  # optional
+    submission_types: ["discussion_topic"]         # REQUIRED for this to actually be a discussion, not a file/text assignment
+    points_possible: 10                            # optional
+    due_at: "2026-08-22T23:59:00-05:00"            # optional — a single ordinary due date, same as any non-discussion assignment
+    unlock_at: "2026-08-17T00:00:00-05:00"         # optional
+    assignment_group: "Discussions"                # optional — matched by name against the course's assignment groups; REQUIRED to exist already if given
+    published: true                                 # optional — defaults true on create
+
+  # Checkpointed discussion (two due dates: initial post + required replies,
+  # each graded separately) — the alternative to the single due_at above.
   # UPDATING one that already exists: any checkpoint field left out falls
   # back to that checkpoint's current live value, same "blank means don't
   # touch" convention as everything else.
