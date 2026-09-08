@@ -126,6 +126,55 @@ The one thing to adjust is the command name itself: every example here
 uses `python3`, but a standard Windows Python install usually only
 provides `python` (or the `py` launcher) — substitute accordingly.
 
+### Local settings (`canvas_tools setup`)
+
+Several flags you'd otherwise type on every run — export format, output
+directory, a `--match` term filter, `--new-only`, `--verbose` — can instead
+be set once as your personal defaults:
+
+```
+python3 -m canvas_tools.setup
+```
+
+(shortcut: `setup`, once installed — see `shortcuts.md`). It's an
+interactive wizard; run it any time to view or change your answers. It
+writes `.canvas_tools_settings.json` at the project root — gitignored, like
+`.env`/`.env.local`, since this is a personal workflow preference, not
+something to share across machines or collaborators.
+
+What it asks:
+
+- **Export format** (`yaml` / `json` / `both`) — `course export`'s default
+  for `--format` when you don't pass one. Default: both.
+- **Default output directory** — `--out`'s default for both `course export`
+  and `submissions pull --all`/no-`--course` sweeps, when you don't pass
+  one. Default: blank, meaning this project's own `exports/` folder (same
+  as always).
+- **Default `--match` term filter** — e.g. `26/FA` — applied automatically
+  to `course export --all` and `submissions pull --all` (course-matching
+  mode only, not the assignment-matching mode inside a single `--course`)
+  so you don't retype your current term all semester. Default: none.
+- **Default `--new-only`** — `submissions pull` and `course export
+  --submissions` default to incremental pulls instead of full rebuilds.
+  Default: off. Pass `--full-rebuild` on any individual run to force a full
+  clear-and-redownload even when this default is on.
+- **Default `--verbose`** — every command that supports `--verbose` prints
+  a per-item log instead of a progress bar by default. Default: off.
+
+An explicit flag on the command line always overrides the stored setting
+for that one run — nothing here removes any flag, it only changes what
+happens when you leave one out.
+
+**Changing your format preference** (e.g. `both` → `yaml`-only) triggers a
+one-time cleanup pass: `setup` scans your existing `exports/` tree for
+`assignment_groups`/`assignments`/`pages`/`announcements`/`modules` files
+in the format you just dropped, and — per file, with an "apply to all"
+shortcut — offers to **A**rchive them (same `archive/` mechanism as the
+`[Y]es/[N]o/[A]rchive` overwrite prompt), **D**elete them, or **L**eave
+them in place. This only runs when `setup` itself detects a changed format
+preference — not on every `course export` run — so routine exports stay
+fast.
+
 ## Commands
 
 ### List your courses
@@ -181,7 +230,10 @@ name contains `TEXT`, case-insensitive — e.g. only exporting one term.
 It's a plain substring match against whatever your school's actual course
 codes/names contain, not tied to any particular format — some schools'
 codes look like `26/FA XXX-100-OL01`, in which case `--match "26/FA"`
-grabs just that term, but the match itself doesn't assume that shape.
+grabs just that term, but the match itself doesn't assume that shape. Left
+out, this falls back to your local settings' `match` if you've set one via
+`canvas_tools setup` — handy for a recurring "this term only" sweep
+without retyping it every time.
 
 `--submissions` additionally pulls every assignment's student submissions
 (files, exported YAML, comment attachments — same as `submissions pull
@@ -195,9 +247,12 @@ automatically.
 `--new-only` (only with `--submissions`) skips submission files and
 comment attachments already pulled on a prior run — see `--new-only`
 under `submissions pull` below, same behavior, same
-`.pulled_attempts.json` manifest per assignment folder. Off by default:
-without it, every run clears and re-downloads everything, for both
-already-exported and newly-added assignments.
+`.pulled_attempts.json` manifest per assignment folder. Off by default,
+unless your [local settings](#local-settings-canvas_tools-setup) set
+`new_only` to on — in which case pass `--full-rebuild` on a given run to
+force a full clear-and-redownload anyway. Without either, every run
+clears and re-downloads everything, for both already-exported and
+newly-added assignments.
 
 `--out` is the _parent_ directory — each course's own subfolder is created
 underneath it automatically, named `course_<id>_<course code>` (e.g.
@@ -207,18 +262,21 @@ code (Canvas course codes look like `26/FA XXX-100-OL01` — `/` isn't valid
 in a directory name, so `/` becomes `-` and spaces become `_`) makes it
 obvious which folder is which course without having to look it up.
 
-Left out, `--out` defaults to _this project's own_ `exports/` folder —
-resolved from where the code itself lives on disk, not your current
-directory, so running this from inside a course's own exports subfolder
-still lands in the right place instead of creating a stray nested
-`exports/exports/...` right there (confirmed the hard way). Give `--out`
-explicitly and it resolves normally, relative to wherever you actually
-are, same as `--file` always has.
+Left out, `--out` defaults to your local settings' `out_dir` if you've set
+one via `canvas_tools setup`, else _this project's own_ `exports/`
+folder — resolved from where the code itself lives on disk, not your
+current directory, so running this from inside a course's own exports
+subfolder still lands in the right place instead of creating a stray
+nested `exports/exports/...` right there (confirmed the hard way). Give
+`--out` explicitly and it resolves normally, relative to wherever you
+actually are, same as `--file` always has.
 
-**Left out,** **`--format`** **writes both** **`.yaml`** **and** **`.json`** **for every
+**Left out, `--format` writes whatever your local settings say** (`setup`'s
+default is **both** `.yaml` **and** `.json` **for every
 resource** — one fetch from Canvas, two files each, so you always have
-both on disk without re-running the export. Give `--format yaml` or
-`--format json` to write only that one instead (rubrics stay CSV either
+both on disk without re-running the export). Give `--format yaml` or
+`--format json` to write only that one instead for a single run,
+regardless of your stored setting (rubrics stay CSV either
 way regardless of `--format` — that format is dictated by Canvas's own
 rubric import endpoint, not a style choice). Every `apply` command already
 reads either format with no changes needed — YAML is a syntactic superset
@@ -611,10 +669,13 @@ python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/
   `--course X --all` pulls every assignment in that one course instead of
   one (optionally filtered by `--match`, a case-insensitive substring
   against each assignment's name — same semantics as `exco`'s own
-  `--match`), each into its own `<id>_<name>` subfolder under `--out`
-  (now the PARENT directory). Left out, `--out` defaults to
-  `<exports>/course_<id>_<course code>/submissions/` — the same location
-  `course export --submissions` uses — not the current directory.
+  `--match`; this assignment-matching mode does **not** fall back to your
+  local settings' `match`, since that's a course filter — see below).
+  Each assignment lands in its own `<id>_<name>` subfolder under `--out`
+  (now the PARENT directory). Left out, `--out` defaults to your local
+  settings' `out_dir` if set, else `<exports>/course_<id>_<course
+  code>/submissions/` — the same location `course export --submissions`
+  uses — not the current directory.
 
   Omitting `--course` entirely (still requires `--all`; `--assignment`
   isn't allowed without `--course`, since there's no single assignment to
@@ -623,10 +684,12 @@ python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/
   filtered by `--match` against each course's code or name (e.g.
   `--match "26/FA"` for one term). In this mode `--match` filters
   *courses*, not assignments; every downloadable-submission assignment in
-  each matched course is pulled. So a single
-  `submissions pull --all --match "26/FA" --new-only` sweeps every
-  Fall-'26 course you teach and pulls only what's new since the last run
-  in each, without having to run it once per class.
+  each matched course is pulled. Left out here, `--match` falls back to
+  your local settings' `match`, so a bare
+  `submissions pull --all --new-only` sweeps whichever term you've
+  configured via `canvas_tools setup` and pulls only what's new since the
+  last run in each course, without having to run it once per class or
+  retype the term filter.
 
   Either way, an assignment whose `submission_types` is a quiz,
   discussion, or another shadow-type with no actual file/text submission
@@ -650,8 +713,10 @@ python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/
   have 2), the earlier file keeps its old flat name while the new attempt
   gets an `Attempt_N`-tagged name — inconsistent naming within that
   student's files. Run without `--new-only` to force a full,
-  consistently-named rebuild. Off by default everywhere — omit it and
-  `pull` behaves exactly as it always has.
+  consistently-named rebuild. Off by default, unless your local settings'
+  `new_only` is on — in which case pass `--full-rebuild` on a given run to
+  force a full clear-and-redownload anyway (mutually exclusive with
+  `--new-only`).
 
 - **`apply`** sends one `PUT .../submissions/:user_id` per student,
   carrying whichever of `posted_grade`, `rubric_assessment`, and `comment`

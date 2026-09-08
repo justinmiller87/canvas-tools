@@ -18,6 +18,7 @@ from canvas_tools.html_clean import clean_html
 from canvas_tools.progress import Progress
 from canvas_tools.rubrics import export_rubrics_csv
 from canvas_tools.submissions import pull_submissions, assignment_dir_name, has_downloadable_submissions
+from canvas_tools.settings import load_settings
 
 # Derived from this file's own location, not the current working directory —
 # so the default --out always lands in this project's real exports/ folder,
@@ -576,6 +577,14 @@ def _ext(fmt):
     return "json" if fmt == "json" else "yaml"
 
 
+# The resource files `export_one_course` writes in whichever of --format's
+# yaml/json it's given — everything else under a course folder (rubrics/
+# CSVs, submissions/*.yaml) has its format dictated by something other than
+# --format, so a format-preference switch in `canvas_tools.setup` only ever
+# needs to clean up stale copies of these five.
+FORMAT_SWITCHABLE_RESOURCES = ["assignment_groups", "assignments", "pages", "announcements", "modules"]
+
+
 def export_one_course(
     c, course_id, out_parent, verbose=False, formats=("yaml",), policy=None, pull_all_submissions=False, new_only_submissions=False
 ):
@@ -687,13 +696,15 @@ def main(argv=None):
     )
     p.add_argument(
         "--out",
-        default=_DEFAULT_OUT,
-        help="Parent directory (default: this project's own exports/ folder, regardless of your "
-        "current directory) — each course's own subfolder, named course_<id>_<course code>, is "
-        "created underneath it. An explicit --out is resolved relative to wherever you actually "
-        "are, same as --file.",
+        default=None,
+        help="Parent directory. Default: your `setup`-configured out_dir if set, else this "
+        "project's own exports/ folder — regardless of your current directory either way — each "
+        "course's own subfolder, named course_<id>_<course code>, is created underneath it. An "
+        "explicit --out is resolved relative to wherever you actually are, same as --file.",
     )
-    p.add_argument("--verbose", action="store_true", help="Print each item as it's fetched instead of a progress bar")
+    p.add_argument(
+        "--verbose", action="store_true", default=None, help="Print each item as it's fetched instead of a progress bar"
+    )
     p.add_argument(
         "--submissions",
         action="store_true",
@@ -704,38 +715,57 @@ def main(argv=None):
     p.add_argument(
         "--new-only",
         action="store_true",
+        default=None,
         help="Only with --submissions: skip submission files and comment attachments already pulled "
         "on a prior export — only fetch what's new since then, instead of clearing and "
-        "re-downloading everything, for both already-exported and newly-added assignments. Off by "
-        "default (full rebuild each run, same as before).",
+        "re-downloading everything, for both already-exported and newly-added assignments. Default: "
+        "your `setup`-configured new_only preference if set, else off (full rebuild each run).",
+    )
+    p.add_argument(
+        "--full-rebuild",
+        action="store_true",
+        help="Only with --submissions: force a full clear-and-redownload even if `setup` has "
+        "new_only turned on by default. Mutually exclusive with --new-only.",
     )
     p.add_argument(
         "--format",
         choices=["yaml", "json"],
         default=None,
-        help="Output format for the written files. Default: write both yaml and json for every "
-        "resource. Give this to write only one. JSON files work with every `apply` command too, "
-        "just without comments and without multi-line-friendly HTML.",
+        help="Output format for the written files. Default: your `setup`-configured format "
+        "preference if set, else both yaml and json for every resource. JSON files work with every "
+        "`apply` command too, just without comments and without multi-line-friendly HTML.",
     )
     args = p.parse_args(argv)
 
     if args.match and not args.all:
         p.error("--match only applies with --all")
-    if args.new_only and not args.submissions:
-        p.error("--new-only only applies with --submissions")
+    if args.new_only and args.full_rebuild:
+        p.error("--new-only and --full-rebuild are mutually exclusive")
+    if (args.new_only or args.full_rebuild) and not args.submissions:
+        p.error("--new-only/--full-rebuild only apply with --submissions")
+
+    settings = load_settings()
+    out_parent = args.out or settings["out_dir"] or _DEFAULT_OUT
+    verbose = settings["verbose"] if args.verbose is None else args.verbose
+    if args.full_rebuild:
+        new_only = False
+    elif args.new_only is not None:
+        new_only = args.new_only
+    else:
+        new_only = settings["new_only"]
+    formats = [args.format] if args.format else (settings["formats"] or ["yaml", "json"])
 
     c = CanvasClient()
 
     if args.all:
-        courses = list_teaching_courses(c, match=args.match)
+        match = args.match or settings["match"]
+        courses = list_teaching_courses(c, match=match)
         course_ids = [str(co["id"]) for co in courses]
         if not course_ids:
             print("No courses found.")
             return
     else:
         course_ids = args.course
-
-    formats = [args.format] if args.format else ["yaml", "json"]
 
     # One policy shared across every course in this run — an "apply to
     # everything else" answer to the first overwrite prompt then covers the
@@ -751,12 +781,12 @@ def main(argv=None):
             export_one_course(
                 c,
                 course_id,
-                args.out,
-                verbose=args.verbose,
+                out_parent,
+                verbose=verbose,
                 formats=formats,
                 policy=policy,
                 pull_all_submissions=args.submissions,
-                new_only_submissions=args.new_only,
+                new_only_submissions=new_only,
             )
         except CanvasError as e:
             print(f"course {course_id}: ERROR — {e}")

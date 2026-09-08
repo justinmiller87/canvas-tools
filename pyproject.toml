@@ -24,6 +24,7 @@ canvas = "canvas_tools.shortcuts:canvas"
 exco = "canvas_tools.export_course:main"
 annpost = "canvas_tools.announcement:main"
 a11ycheck = "canvas_tools.a11y_check:main"
+setup = "canvas_tools.setup:main"
 
 # Per-resource shortcuts: bare name = apply, "x" suffix = export (see
 # canvas_tools/shortcuts.py and shortcuts.md for the full pattern).

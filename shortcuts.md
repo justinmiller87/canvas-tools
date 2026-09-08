@@ -28,6 +28,7 @@ Pattern: bare resource name = `apply` (the common case), `x` suffix =
 | `rubex`               | `python3 -m canvas_tools.cli rubrics export`                                                      |
 | `rubimp`              | `python3 -m canvas_tools.cli rubrics import`                                                      |
 | `rubupd`              | `python3 -m canvas_tools.cli rubrics update`                                                      |
+| `setup`               | `python3 -m canvas_tools.setup` (interactive local settings wizard — format, out dir, --match, --new-only, --verbose defaults) |
 | `subdl`               | `python3 -m canvas_tools.cli submissions download`                                                |
 | `subx`                | `python3 -m canvas_tools.cli submissions export`                                                  |
 | `subpull`             | `python3 -m canvas_tools.cli submissions pull` (subdl + subx combined into one --out directory)   |
@@ -50,6 +51,8 @@ agroups --course 10001 --file my_groups.yaml --dry-run
 assignmentsx --course 10001 --out "exports/course_10001_.../assignments.yaml"
 
 rubimp --course 10001 --file "rubrics/New Rubric.csv" --dry-run
+
+setup
 
 exco --course 10001 10002 10003 --out exports
 exco --all --match "26/FA" --out exports

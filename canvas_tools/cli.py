@@ -43,6 +43,7 @@ from canvas_tools.export_course import (
 )
 from datetime import datetime
 from canvas_tools.progress import Progress
+from canvas_tools.settings import load_settings
 
 
 def _write_single_yaml_export(args, c, export_fn, key, apply_cmd_name, **kwargs):
@@ -1950,11 +1951,23 @@ def cmd_submissions_pull(args, c):
         raise CanvasError("either --course or --all is required")
     if args.match and not args.all:
         raise CanvasError("--match only applies with --all")
+    if args.new_only and args.full_rebuild:
+        raise CanvasError("--new-only and --full-rebuild are mutually exclusive")
+
+    settings = load_settings()
+    default_out_root = settings["out_dir"] or _DEFAULT_OUT
+    if args.full_rebuild:
+        new_only = False
+    elif args.new_only is not None:
+        new_only = args.new_only
+    else:
+        new_only = settings["new_only"]
 
     policy = OverwritePolicy()
 
     if not args.course:
-        courses = list_teaching_courses(c, match=args.match)
+        match = args.match or settings["match"]
+        courses = list_teaching_courses(c, match=match)
         if not courses:
             print("No courses found.")
             return
@@ -1967,8 +1980,8 @@ def cmd_submissions_pull(args, c):
             if args.out:
                 parent = os.path.join(args.out, _course_folder_name(course_id, co.get("course_code")))
             else:
-                parent = os.path.join(_DEFAULT_OUT, _course_folder_name(course_id, co.get("course_code")), "submissions")
-            total += _pull_all_assignments(c, course_id, parent, verbose=args.verbose, new_only=args.new_only, policy=policy)
+                parent = os.path.join(default_out_root, _course_folder_name(course_id, co.get("course_code")), "submissions")
+            total += _pull_all_assignments(c, course_id, parent, verbose=args.verbose, new_only=new_only, policy=policy)
         if len(courses) > 1:
             print(f"\ndone: pulled {total} assignment(s) of submissions across {len(courses)} course(s)")
         return
@@ -1978,16 +1991,21 @@ def cmd_submissions_pull(args, c):
             parent = args.out
         else:
             course_code = c.get(f"courses/{args.course}").get("course_code")
-            parent = os.path.join(_DEFAULT_OUT, _course_folder_name(args.course, course_code), "submissions")
+            parent = os.path.join(default_out_root, _course_folder_name(args.course, course_code), "submissions")
             print(f"no --out given, defaulting to {parent}/ (same layout as `course export --submissions`)")
-        _pull_all_assignments(c, args.course, parent, match=args.match, verbose=args.verbose, new_only=args.new_only, policy=policy)
+        # Not falling back to settings["match"] here: that setting is a
+        # COURSE-code/name filter (see the no-`--course` branch above), and
+        # this branch's --match instead filters ASSIGNMENT names within the
+        # one course already given — applying the course-shaped default here
+        # would silently match zero assignments most of the time.
+        _pull_all_assignments(c, args.course, parent, match=args.match, verbose=args.verbose, new_only=new_only, policy=policy)
         return
 
     if not args.assignment:
         raise CanvasError("--assignment is required unless --all is given")
     assignment = _resolve_assignment(c, args.course, args.assignment)
     out_dir = args.out or assignment_dir_name(assignment)
-    pull_submissions(c, args.course, assignment, out_dir, verbose=args.verbose, new_only=args.new_only)
+    pull_submissions(c, args.course, assignment, out_dir, verbose=args.verbose, new_only=new_only)
 
 
 def cmd_submissions_apply(args, c):
@@ -2026,7 +2044,11 @@ def build_parser():
     # --verbose swaps that for a line printed per item instead.
     verbose_parent = argparse.ArgumentParser(add_help=False)
     verbose_parent.add_argument(
-        "--verbose", action="store_true", help="Print each item as it happens instead of a progress bar"
+        "--verbose",
+        action="store_true",
+        default=None,
+        help="Print each item as it happens instead of a progress bar. Default: your "
+        "`setup`-configured verbose preference if set, else off.",
     )
 
     p_courses = sub.add_parser("courses", help="Course operations")
@@ -2219,10 +2241,17 @@ def build_parser():
     p_sub_pull.add_argument(
         "--new-only",
         action="store_true",
+        default=None,
         help="Skip submission files and comment attachments already pulled on a prior run of this "
         "assignment — only fetch what's new since then, instead of clearing and re-downloading "
-        "everything. A never-before-pulled assignment still gets a full pull either way. Off by "
-        "default (full rebuild each run, same as before).",
+        "everything. A never-before-pulled assignment still gets a full pull either way. Default: "
+        "your `setup`-configured new_only preference if set, else off (full rebuild each run).",
+    )
+    p_sub_pull.add_argument(
+        "--full-rebuild",
+        action="store_true",
+        help="Force a full clear-and-redownload even if `setup` has new_only turned on by default. "
+        "Mutually exclusive with --new-only.",
     )
     p_sub_pull.add_argument(
         "--out",
@@ -2253,6 +2282,8 @@ def build_parser():
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "verbose", False) is None:
+        args.verbose = load_settings()["verbose"]
     c = CanvasClient()
     try:
         args.func(args, c)
