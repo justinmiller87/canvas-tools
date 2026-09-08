@@ -37,6 +37,9 @@ from canvas_tools.export_course import (
     select_for_cleanup,
     TIME_WINDOWS,
     find_course_export_dir,
+    list_teaching_courses,
+    _course_folder_name,
+    _DEFAULT_OUT,
 )
 from datetime import datetime
 from canvas_tools.progress import Progress
@@ -1881,48 +1884,110 @@ def cmd_submissions_export(args, c):
             print(f"downloaded {downloaded} comment attachment(s) -> {comment_attachments_dir}/")
 
 
+def _pull_all_assignments(c, course_id, parent_out, match=None, verbose=False, new_only=False, policy=None):
+    """Pull every downloadable-submission assignment in one course into
+    `<parent_out>/<assignment name>_<id>/`, optionally filtered by `match`
+    (a case-insensitive substring against each assignment's name). Shared
+    by `submissions pull --course X --all` (single course) and the
+    no-`--course` multi-course sweep below (there, `match` is always None
+    — `--match` has already been spent filtering which courses to visit).
+    Returns the number of assignments pulled."""
+    assignments = c.get(f"courses/{course_id}/assignments", params={"per_page": 100})
+    assignments = [a for a in assignments if has_downloadable_submissions(a)]
+    if match:
+        needle = match.lower()
+        matched = [a for a in assignments if needle in a["name"].lower()]
+        print(f"matched {len(matched)}/{len(assignments)} assignments against {match!r}")
+        assignments = matched
+    if not assignments:
+        print(f"course {course_id}: no assignments found.")
+        return 0
+    for i, assignment in enumerate(assignments):
+        if len(assignments) > 1:
+            print(f"\n[{i + 1}/{len(assignments)}] {assignment['name']}")
+        pull_submissions(
+            c,
+            course_id,
+            assignment,
+            os.path.join(parent_out, assignment_dir_name(assignment)),
+            verbose=verbose,
+            policy=policy,
+            new_only=new_only,
+        )
+    return len(assignments)
+
+
 def cmd_submissions_pull(args, c):
     """`download` + `export` in one shot: the assignment's submission
     files, the exported YAML, and any comment attachments.
 
-    Single-assignment mode: `--out`, if given, is the exact target
-    directory; if omitted, defaults to `<assignment name>_<id>` in the
-    current directory (see `assignment_dir_name`).
+    Single-assignment mode (`--course X --assignment Y`): `--out`, if
+    given, is the exact target directory; if omitted, defaults to
+    `<assignment name>_<id>` in the current directory (see
+    `assignment_dir_name`).
 
-    `--all` mode: pulls every assignment in the course (optionally
-    filtered by `--match`, a case-insensitive substring against each
-    assignment's name), each into its own `<assignment name>_<id>`
-    subfolder under `--out` (the PARENT directory here — defaults to the
-    current directory if omitted)."""
+    `--course X --all` mode: pulls every assignment in that one course
+    (optionally filtered by `--match`, a case-insensitive substring
+    against each assignment's name), each into its own `<assignment
+    name>_<id>` subfolder under `--out` (the PARENT directory here). If
+    `--out` is omitted, this defaults to
+    `<exports>/course_<id>_<code>/submissions/` — the same location
+    `course export --submissions` uses.
+
+    No `--course` at all (`--all` required, `--assignment` not allowed):
+    sweeps every course you teach — optionally filtered by `--match`
+    against each course's code or name (e.g. `--match "FY/26"` for one
+    term) — and pulls every downloadable-submission assignment in each
+    matched course, same as `course export --all --match ... --submissions`
+    would, but without the assignments/pages/modules/etc. side of a full
+    course export. Combine with `--new-only` for a routine "what's new
+    across all my courses this week" pull."""
     if args.assignment and args.all:
         raise CanvasError("--assignment and --all are mutually exclusive")
+    if args.assignment and not args.course:
+        raise CanvasError("--assignment requires --course (there's no single assignment to resolve across multiple courses)")
+    if not args.course and not args.all:
+        raise CanvasError("either --course or --all is required")
     if args.match and not args.all:
         raise CanvasError("--match only applies with --all")
 
-    if args.all:
-        assignments = c.get(f"courses/{args.course}/assignments", params={"per_page": 100})
-        assignments = [a for a in assignments if has_downloadable_submissions(a)]
-        if args.match:
-            needle = args.match.lower()
-            matched = [a for a in assignments if needle in a["name"].lower()]
-            print(f"matched {len(matched)}/{len(assignments)} assignments against {args.match!r}")
-            assignments = matched
-        if not assignments:
-            print("No assignments found.")
+    policy = OverwritePolicy()
+
+    if not args.course:
+        courses = list_teaching_courses(c, match=args.match)
+        if not courses:
+            print("No courses found.")
             return
-        parent = args.out or "."
-        policy = OverwritePolicy()
-        for i, assignment in enumerate(assignments):
-            if len(assignments) > 1:
-                print(f"\n[{i + 1}/{len(assignments)}] {assignment['name']}")
-            pull_submissions(c, args.course, assignment, os.path.join(parent, assignment_dir_name(assignment)), verbose=args.verbose, policy=policy)
+        total = 0
+        for i, co in enumerate(courses):
+            course_id = str(co["id"])
+            if len(courses) > 1:
+                label = co.get("course_code") or co.get("name") or course_id
+                print(f"\n=== [{i + 1}/{len(courses)}] course {course_id} ({label}) ===")
+            if args.out:
+                parent = os.path.join(args.out, _course_folder_name(course_id, co.get("course_code")))
+            else:
+                parent = os.path.join(_DEFAULT_OUT, _course_folder_name(course_id, co.get("course_code")), "submissions")
+            total += _pull_all_assignments(c, course_id, parent, verbose=args.verbose, new_only=args.new_only, policy=policy)
+        if len(courses) > 1:
+            print(f"\ndone: pulled {total} assignment(s) of submissions across {len(courses)} course(s)")
+        return
+
+    if args.all:
+        if args.out:
+            parent = args.out
+        else:
+            course_code = c.get(f"courses/{args.course}").get("course_code")
+            parent = os.path.join(_DEFAULT_OUT, _course_folder_name(args.course, course_code), "submissions")
+            print(f"no --out given, defaulting to {parent}/ (same layout as `course export --submissions`)")
+        _pull_all_assignments(c, args.course, parent, match=args.match, verbose=args.verbose, new_only=args.new_only, policy=policy)
         return
 
     if not args.assignment:
         raise CanvasError("--assignment is required unless --all is given")
     assignment = _resolve_assignment(c, args.course, args.assignment)
     out_dir = args.out or assignment_dir_name(assignment)
-    pull_submissions(c, args.course, assignment, out_dir, verbose=args.verbose)
+    pull_submissions(c, args.course, assignment, out_dir, verbose=args.verbose, new_only=args.new_only)
 
 
 def cmd_submissions_apply(args, c):
@@ -2130,17 +2195,42 @@ def build_parser():
         help="download + export combined: submission files, exported YAML, and comment attachment files, all under one directory",
         parents=[verbose_parent],
     )
-    p_sub_pull.add_argument("--course", required=True, help="Canvas course ID")
-    p_sub_pull.add_argument("--assignment", help="Assignment name (exact match) — required unless --all is given")
-    p_sub_pull.add_argument("--all", action="store_true", help="Pull every assignment in the course instead of one")
     p_sub_pull.add_argument(
-        "--match", help="Only with --all: case-insensitive substring to match against each assignment's name"
+        "--course",
+        help="Canvas course ID. Omit (with --all) to sweep every course you teach instead of one — "
+        "same courses `course export --all` would find.",
+    )
+    p_sub_pull.add_argument(
+        "--assignment", help="Assignment name (exact match) — required unless --all is given. Requires --course."
+    )
+    p_sub_pull.add_argument(
+        "--all",
+        action="store_true",
+        help="With --course: pull every assignment in that course instead of one. Without --course: "
+        "required — pull every downloadable-submission assignment across every course you teach.",
+    )
+    p_sub_pull.add_argument(
+        "--match",
+        help="Only with --all. With --course: case-insensitive substring to match against each "
+        "assignment's name. Without --course: case-insensitive substring to match against each "
+        "course's code or name (e.g. 'FY/26' for one term) — assignments aren't further filtered "
+        "in this mode, every downloadable one in each matched course is pulled.",
+    )
+    p_sub_pull.add_argument(
+        "--new-only",
+        action="store_true",
+        help="Skip submission files and comment attachments already pulled on a prior run of this "
+        "assignment — only fetch what's new since then, instead of clearing and re-downloading "
+        "everything. A never-before-pulled assignment still gets a full pull either way. Off by "
+        "default (full rebuild each run, same as before).",
     )
     p_sub_pull.add_argument(
         "--out",
         help="Output directory (submission_files/, submissions.yaml, comment_attachments/). Default: "
         "'<assignment name>_<id>' in the current directory. With --all, this is instead the PARENT "
-        "directory each assignment's own '<name>_<id>' subfolder is created under (default: current directory).",
+        "directory each assignment's own '<name>_<id>' subfolder is created under — defaults to "
+        "'<exports>/course_<id>_<code>/submissions/', the same location `course export --submissions` "
+        "uses, rather than the current directory.",
     )
     p_sub_pull.set_defaults(func=cmd_submissions_pull)
 

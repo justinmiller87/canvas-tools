@@ -192,6 +192,13 @@ shadow-type with nothing to actually pull (`online_quiz`,
 `discussion_topic`, `external_tool`, `not_graded`, `none`, ...) is skipped
 automatically.
 
+`--new-only` (only with `--submissions`) skips submission files and
+comment attachments already pulled on a prior run — see `--new-only`
+under `submissions pull` below, same behavior, same
+`.pulled_attempts.json` manifest per assignment folder. Off by default:
+without it, every run clears and re-downloads everything, for both
+already-exported and newly-added assignments.
+
 `--out` is the _parent_ directory — each course's own subfolder is created
 underneath it automatically, named `course_<id>_<course code>` (e.g.
 `course_10001_26-FA_XXX-100-OL01`), not just the bare id. A course code
@@ -519,6 +526,8 @@ below) for an `apply` input file — the shape `export`/`pull` also write.
 python3 -m canvas_tools.cli submissions download --course 10001 --assignment "Essay 1" --out submissions/essay1_files/
 python3 -m canvas_tools.cli submissions export --course 10001 --assignment "Essay 1" --out submissions/essay1.yaml
 python3 -m canvas_tools.cli submissions pull --course 10001 --assignment "Essay 1" --out submissions/essay1/
+python3 -m canvas_tools.cli submissions pull --course 10001 --all --new-only
+python3 -m canvas_tools.cli submissions pull --all --match "26/FA" --new-only
 python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/essay1.yaml --dry-run
 python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/essay1.yaml
 ```
@@ -599,16 +608,50 @@ python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/
   here — it defaults to `<assignment id>_<assignment name>` in the
   current directory.
 
-  `--all` pulls every assignment in the course instead of one (optionally
-  filtered by `--match`, a case-insensitive substring against each
-  assignment's name — same semantics as `exco`'s own `--match`), each
-  into its own `<id>_<name>` subfolder under `--out` (now the PARENT
-  directory, default: current directory). Either way, an assignment whose
-  `submission_types` is a quiz, discussion, or another shadow-type with no
-  actual file/text submission to pull (e.g. `online_quiz`,
-  `discussion_topic`, `external_tool`, `not_graded`, `none`) is skipped
-  automatically — this only applies to `--all`; a single assignment named
-  explicitly via `--assignment` is never skipped this way.
+  `--course X --all` pulls every assignment in that one course instead of
+  one (optionally filtered by `--match`, a case-insensitive substring
+  against each assignment's name — same semantics as `exco`'s own
+  `--match`), each into its own `<id>_<name>` subfolder under `--out`
+  (now the PARENT directory). Left out, `--out` defaults to
+  `<exports>/course_<id>_<course code>/submissions/` — the same location
+  `course export --submissions` uses — not the current directory.
+
+  Omitting `--course` entirely (still requires `--all`; `--assignment`
+  isn't allowed without `--course`, since there's no single assignment to
+  resolve across multiple courses) sweeps every course you teach instead
+  of one — same course discovery as `export_course --all` — optionally
+  filtered by `--match` against each course's code or name (e.g.
+  `--match "26/FA"` for one term). In this mode `--match` filters
+  *courses*, not assignments; every downloadable-submission assignment in
+  each matched course is pulled. So a single
+  `submissions pull --all --match "26/FA" --new-only` sweeps every
+  Fall-'26 course you teach and pulls only what's new since the last run
+  in each, without having to run it once per class.
+
+  Either way, an assignment whose `submission_types` is a quiz,
+  discussion, or another shadow-type with no actual file/text submission
+  to pull (e.g. `online_quiz`, `discussion_topic`, `external_tool`,
+  `not_graded`, `none`) is skipped automatically — this only applies to
+  `--all`; a single assignment named explicitly via `--assignment` is
+  never skipped this way.
+
+  `--new-only` skips submission files and comment attachments already
+  pulled on a prior run of that assignment (tracked via a
+  `.pulled_attempts.json` manifest inside `<out>/submission_files/`) —
+  only what's new since then gets downloaded, and `<out>/` isn't cleared
+  first the way it normally is. A never-before-pulled assignment still
+  gets a full pull either way, manifest or not. `submissions.yaml` itself
+  is always fully rewritten regardless (cheap — no downloads involved —
+  so grades/comments/rubric state always reflects Canvas's current
+  state), and a comment attachment is skipped only if a file already
+  sits at its exact destination path, no manifest needed for those. One
+  trade-off: if a student's attempt count changes between `--new-only`
+  runs (their first attempt was pulled flat, then they resubmit and now
+  have 2), the earlier file keeps its old flat name while the new attempt
+  gets an `Attempt_N`-tagged name — inconsistent naming within that
+  student's files. Run without `--new-only` to force a full,
+  consistently-named rebuild. Off by default everywhere — omit it and
+  `pull` behaves exactly as it always has.
 
 - **`apply`** sends one `PUT .../submissions/:user_id` per student,
   carrying whichever of `posted_grade`, `rubric_assessment`, and `comment`

@@ -6,6 +6,7 @@ same `PUT .../submissions/:user_id` call that posts a comment also accepts
 `apply_submissions` below sends all three in one request per student rather
 than three separate ones.
 """
+import json
 import os
 import shutil
 import zipfile
@@ -71,13 +72,24 @@ def assignment_dir_name(assignment):
     return f"{assignment['id']}_{safe}" if safe else str(assignment["id"])
 
 
-def pull_submissions(c, course_id, assignment, out_dir, verbose=False, policy=None):
+def pull_submissions(c, course_id, assignment, out_dir, verbose=False, policy=None, new_only=False):
     """`download` + `export` combined into one `out_dir`: the assignment's
     submission files, the exported YAML, and any comment attachments.
     Shared by `submissions pull` (single assignment or --all) and `course
     export --submissions`, so both call sites behave identically. `policy`
     is an `OverwritePolicy` to share a single Y/N/A decision across a
     multi-assignment run — see `write_with_confirmation`.
+
+    `new_only=True` skips submission files and comment attachments already
+    pulled on a previous run (tracked via a manifest — see
+    `download_submission_files`) instead of clearing and re-downloading
+    everything, so a repeat `pull --all --new-only` over the same course
+    only fetches what's actually new since last time — a brand-new
+    assignment (no prior manifest) still gets a full pull either way.
+    `submissions.yaml` itself is still fully rewritten each run (cheap,
+    no downloads involved) so grades/comments/rubric state always reflects
+    Canvas's current state.
+
     Returns (submission_count, downloaded_comment_attachment_count)."""
     # Imported here, not at module level: export_course.py doesn't import
     # anything from this module, so importing it back would be a cycle —
@@ -85,11 +97,15 @@ def pull_submissions(c, course_id, assignment, out_dir, verbose=False, policy=No
     from canvas_tools.export_course import write_with_confirmation
 
     os.makedirs(out_dir, exist_ok=True)
-    written = download_submission_files(c, course_id, assignment["id"], os.path.join(out_dir, "submission_files"), verbose=verbose)
+    written = download_submission_files(
+        c, course_id, assignment["id"], os.path.join(out_dir, "submission_files"), verbose=verbose, new_only=new_only
+    )
     print(f"downloaded {written} submission file(s) -> {out_dir}/submission_files/")
 
     comment_attachments_dir = os.path.join(out_dir, "comment_attachments")
-    data, downloaded = export_submissions(c, course_id, assignment, comment_attachments_dir=comment_attachments_dir, verbose=verbose)
+    data, downloaded = export_submissions(
+        c, course_id, assignment, comment_attachments_dir=comment_attachments_dir, verbose=verbose, new_only=new_only
+    )
     yaml_path = os.path.join(out_dir, "submissions.yaml")
     if write_with_confirmation(
         data,
@@ -137,7 +153,7 @@ def list_submissions(c, course_id, assignment_id, extra_includes=None):
     )
 
 
-def download_submission_files(c, course_id, assignment_id, out_dir, verbose=False):
+def download_submission_files(c, course_id, assignment_id, out_dir, verbose=False, new_only=False):
     """Save every file a student attached to their submission into
     `out_dir`, across every attempt (not just their current/latest one) —
     a resubmission can reuse the same filename on a later attempt, which
@@ -169,13 +185,32 @@ def download_submission_files(c, course_id, assignment_id, out_dir, verbose=Fals
     ones), re-running this after a student resubmits would otherwise leave
     the old file(s) sitting next to the new ones instead of being
     replaced — `download_file` itself has no overwrite-protection or
-    cleanup, unlike the `.yaml` side of a pull. Returns the number of
-    files written."""
+    cleanup, unlike the `.yaml` side of a pull.
+
+    `new_only=True` changes this: `out_dir` is left alone (not cleared),
+    and a `(user_id, attempt)` this function has already downloaded on a
+    prior run — tracked in a `.pulled_attempts.json` manifest inside
+    `out_dir` — is skipped rather than re-fetched. A brand-new assignment
+    (no manifest yet) still downloads everything. Trade-off: if a student's
+    attempt count changes between runs (e.g. their first attempt was
+    pulled flat, then they resubmit and now have 2 attempts), the earlier
+    file keeps its old flat name while the new attempt gets an
+    `Attempt_N`-tagged name — inconsistent naming within that student's
+    files. Run without `--new-only` to force a full, consistently-named
+    rebuild. Returns the number of files written this run."""
     submissions = list_submissions(c, course_id, assignment_id, extra_includes=["submission_history"])
-    if os.path.isdir(out_dir):
-        print(f"clearing {out_dir}/ (rebuilding from current Canvas state)")
-        shutil.rmtree(out_dir)
-    os.makedirs(out_dir, exist_ok=True)
+    manifest_path = os.path.join(out_dir, ".pulled_attempts.json")
+    known_attempts = set()
+    if new_only:
+        if os.path.isfile(manifest_path):
+            with open(manifest_path) as f:
+                known_attempts = {tuple(pair) for pair in json.load(f)}
+        os.makedirs(out_dir, exist_ok=True)
+    else:
+        if os.path.isdir(out_dir):
+            print(f"clearing {out_dir}/ (rebuilding from current Canvas state)")
+            shutil.rmtree(out_dir)
+        os.makedirs(out_dir, exist_ok=True)
     downloaded = 0
     with Progress(len(submissions), "submissions", verbose=verbose) as progress:
         for s in submissions:
@@ -188,6 +223,9 @@ def download_submission_files(c, course_id, assignment_id, out_dir, verbose=Fals
             prefix = _safe_prefix(student_name, s.get("user_id"))
             multi_attempt = len(attempts) > 1
             for h in attempts:
+                key = (s.get("user_id"), h.get("attempt"))
+                if new_only and key in known_attempts:
+                    continue
                 attachments = h["attachments"]
                 attempt_tag = f"Attempt_{h.get('attempt')}" if multi_attempt else None
                 if len(attachments) > 1:
@@ -207,16 +245,27 @@ def download_submission_files(c, course_id, assignment_id, out_dir, verbose=Fals
                     if verbose:
                         label = f"{student_name} attempt {h.get('attempt')}" if multi_attempt else student_name
                         print(f"  downloaded: {label} -> {att['filename']}")
+                known_attempts.add(key)
             progress.step(student_name)
+    if new_only:
+        with open(manifest_path, "w") as f:
+            json.dump(sorted(list(pair) for pair in known_attempts), f)
     return downloaded
 
 
-def export_submissions(c, course_id, assignment, comment_attachments_dir=None, verbose=False):
+def export_submissions(c, course_id, assignment, comment_attachments_dir=None, verbose=False, new_only=False):
     """Grades, rubric assessments, comments, and submission metadata for one
     assignment -> the YAML schema `submissions apply` reads back. `user_id`
     is the authoritative key for `apply` (student names aren't guaranteed
     unique); `student` is kept alongside purely for human readability when
     editing the file.
+
+    `new_only=True` skips downloading a comment attachment whose
+    destination file already exists in `comment_attachments_dir` from a
+    prior run — cheap since the filename (`<student>_<user_id>_<original
+    filename>`) is deterministic, so an unchanged comment costs nothing to
+    re-see. The YAML itself is always fully rebuilt from Canvas's current
+    submissions either way, since that costs no downloads.
 
     A file a student submitted as their assignment work is a *submission*
     attachment (see `download_submission_files`); a file someone attached
@@ -289,6 +338,8 @@ def export_submissions(c, course_id, assignment, comment_attachments_dir=None, v
                             prefix = _safe_prefix(student_name, s.get("user_id"))
                             for a in cm_attachments:
                                 dest = os.path.join(comment_attachments_dir, f"{prefix}_{a['filename']}")
+                                if new_only and os.path.exists(dest):
+                                    continue
                                 _download_and_extract(c, a["url"], dest)
                                 downloaded += 1
                                 if verbose:

@@ -549,6 +549,21 @@ def _course_folder_name(course_id, course_code):
     return f"course_{course_id}_{safe_code}" if safe_code else f"course_{course_id}"
 
 
+def list_teaching_courses(c, match=None):
+    """Every course you teach that's currently available, optionally
+    filtered by `match` — a case-insensitive substring against each
+    course's code or name (e.g. 'FY/26' to match just one term). Shared by
+    `export_course --all` and `submissions pull` (when it's run without
+    `--course`, sweeping every course you teach instead of one)."""
+    courses = c.get("courses", params={"per_page": 100, "enrollment_type": "teacher", "state[]": "available"})
+    if match:
+        needle = match.lower()
+        matched = [co for co in courses if needle in (co.get("course_code") or "").lower() or needle in (co.get("name") or "").lower()]
+        print(f"matched {len(matched)}/{len(courses)} courses against {match!r}")
+        courses = matched
+    return courses
+
+
 def find_course_export_dir(course_id, out_parent=_DEFAULT_OUT):
     """Locate a course's export directory by id alone (no course_code, so no
     extra API call), by globbing for `_course_folder_name`'s pattern. Returns
@@ -561,7 +576,9 @@ def _ext(fmt):
     return "json" if fmt == "json" else "yaml"
 
 
-def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",), policy=None, pull_all_submissions=False):
+def export_one_course(
+    c, course_id, out_parent, verbose=False, formats=("yaml",), policy=None, pull_all_submissions=False, new_only_submissions=False
+):
     if policy is None:
         policy = OverwritePolicy()
     course_code = c.get(f"courses/{course_id}").get("course_code")
@@ -645,7 +662,13 @@ def export_one_course(c, course_id, out_parent, verbose=False, formats=("yaml",)
             if len(assignments) > 1:
                 print(f"\n[{i + 1}/{len(assignments)}] {assignment['name']}")
             pull_submissions(
-                c, course_id, assignment, os.path.join(submissions_dir, assignment_dir_name(assignment)), verbose=verbose, policy=policy
+                c,
+                course_id,
+                assignment,
+                os.path.join(submissions_dir, assignment_dir_name(assignment)),
+                verbose=verbose,
+                policy=policy,
+                new_only=new_only_submissions,
             )
 
 
@@ -679,6 +702,14 @@ def main(argv=None):
         "pull --all`. Off by default — omit this and course export runs exactly as before.",
     )
     p.add_argument(
+        "--new-only",
+        action="store_true",
+        help="Only with --submissions: skip submission files and comment attachments already pulled "
+        "on a prior export — only fetch what's new since then, instead of clearing and "
+        "re-downloading everything, for both already-exported and newly-added assignments. Off by "
+        "default (full rebuild each run, same as before).",
+    )
+    p.add_argument(
         "--format",
         choices=["yaml", "json"],
         default=None,
@@ -690,16 +721,13 @@ def main(argv=None):
 
     if args.match and not args.all:
         p.error("--match only applies with --all")
+    if args.new_only and not args.submissions:
+        p.error("--new-only only applies with --submissions")
 
     c = CanvasClient()
 
     if args.all:
-        courses = c.get("courses", params={"per_page": 100, "enrollment_type": "teacher", "state[]": "available"})
-        if args.match:
-            needle = args.match.lower()
-            matched = [co for co in courses if needle in (co.get("course_code") or "").lower() or needle in (co.get("name") or "").lower()]
-            print(f"matched {len(matched)}/{len(courses)} courses against {args.match!r}")
-            courses = matched
+        courses = list_teaching_courses(c, match=args.match)
         course_ids = [str(co["id"]) for co in courses]
         if not course_ids:
             print("No courses found.")
@@ -721,7 +749,14 @@ def main(argv=None):
             print(f"\n=== [{i + 1}/{len(course_ids)}] course {course_id} ===")
         try:
             export_one_course(
-                c, course_id, args.out, verbose=args.verbose, formats=formats, policy=policy, pull_all_submissions=args.submissions
+                c,
+                course_id,
+                args.out,
+                verbose=args.verbose,
+                formats=formats,
+                policy=policy,
+                pull_all_submissions=args.submissions,
+                new_only_submissions=args.new_only,
             )
         except CanvasError as e:
             print(f"course {course_id}: ERROR — {e}")
