@@ -4,7 +4,6 @@ schema used by `canvas assignments apply` / `canvas modules apply`, so a real
 built course can be inspected (or reused as a template) locally.
 """
 import argparse
-import glob
 import json
 import locale
 import os
@@ -19,14 +18,8 @@ from canvas_tools.progress import Progress
 from canvas_tools.rubrics import export_rubrics_csv
 from canvas_tools.submissions import pull_submissions, assignment_dir_name, has_downloadable_submissions
 from canvas_tools.settings import load_settings
-
-# Derived from this file's own location, not the current working directory —
-# so the default --out always lands in this project's real exports/ folder,
-# even when run from inside a course's own exports subfolder (where a bare
-# relative "exports" would instead create a stray nested exports/exports/...
-# right there). An explicit --out is unaffected by this and still resolves
-# relative to wherever you actually are, same as --file always has.
-_DEFAULT_OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "exports")
+from canvas_tools.course_paths import _DEFAULT_OUT, _course_folder_name, find_course_export_dir
+from canvas_tools.run_log import open_run_log, vprint
 
 ASSIGNMENT_FIELDS = [
     "name",
@@ -436,10 +429,10 @@ def export_assignments(c, course_id):
     return {"assignments": out}
 
 
-def export_pages(c, course_id, verbose=False):
+def export_pages(c, course_id, verbose=False, log=None):
     pages = c.get(f"courses/{course_id}/pages", params={"per_page": 100})
     out = []
-    with Progress(len(pages), "pages", verbose=verbose) as progress:
+    with Progress(len(pages), "pages", verbose=verbose, log=log) as progress:
         for p in pages:
             full = c.get(f"courses/{course_id}/pages/{p['url']}")
             item = {"id": full["page_id"], "title": full["title"]}
@@ -452,8 +445,7 @@ def export_pages(c, course_id, verbose=False):
                 item["editing_roles"] = full["editing_roles"]
             out.append(item)
             progress.step(full["title"])
-            if verbose:
-                print(f"  fetched: {full['title']}")
+            vprint(f"  fetched: {full['title']}", verbose, log)
     return {"pages": out}
 
 
@@ -541,15 +533,6 @@ def export_modules(c, course_id):
     return {"modules": out}
 
 
-def _course_folder_name(course_id, course_code):
-    # Course codes look like "26/FA CIS-617-OL01" — "/" isn't valid in a
-    # directory name, and leaving it as a bare id ("course_10001") is
-    # unreadable months later when you don't remember which id was which
-    # section. "/" -> "-", " " -> "_" gives "course_10001_26-FA_XXX-100-OL01".
-    safe_code = (course_code or "").replace("/", "-").replace(" ", "_")
-    return f"course_{course_id}_{safe_code}" if safe_code else f"course_{course_id}"
-
-
 def list_teaching_courses(c, match=None):
     """Every course you teach that's currently available, optionally
     filtered by `match` — a case-insensitive substring against each
@@ -565,14 +548,6 @@ def list_teaching_courses(c, match=None):
     return courses
 
 
-def find_course_export_dir(course_id, out_parent=_DEFAULT_OUT):
-    """Locate a course's export directory by id alone (no course_code, so no
-    extra API call), by globbing for `_course_folder_name`'s pattern. Returns
-    the path, or None if this course has never been exported locally."""
-    matches = glob.glob(os.path.join(out_parent, f"course_{course_id}_*"))
-    return matches[0] if matches else None
-
-
 def _ext(fmt):
     return "json" if fmt == "json" else "yaml"
 
@@ -586,7 +561,7 @@ FORMAT_SWITCHABLE_RESOURCES = ["assignment_groups", "assignments", "pages", "ann
 
 
 def export_one_course(
-    c, course_id, out_parent, verbose=False, formats=("yaml",), policy=None, pull_all_submissions=False, new_only_submissions=False
+    c, course_id, out_parent, verbose=False, formats=("yaml",), policy=None, pull_all_submissions=False, new_only_submissions=False, log=None
 ):
     if policy is None:
         policy = OverwritePolicy()
@@ -595,14 +570,17 @@ def export_one_course(
     os.makedirs(out, exist_ok=True)
     print(f"exporting course {course_id} to {out}/")
 
-    rubric_files = export_rubrics_csv(c, course_id, verbose=verbose)
+    rubric_files = export_rubrics_csv(c, course_id, verbose=verbose, log=log)
     rubrics_dir = os.path.join(out, "rubrics")
     os.makedirs(rubrics_dir, exist_ok=True)
     written = 0
     for filename, csv_text in rubric_files:
         if write_text_with_confirmation(os.path.join(rubrics_dir, filename), csv_text, newline="", policy=policy):
             written += 1
-    print(f"wrote {written} rubrics -> {rubrics_dir}/")
+    msg = f"wrote {written} rubrics -> {rubrics_dir}/"
+    print(msg)
+    if log:
+        log.write(msg)
 
     assignment_groups = export_assignment_groups(c, course_id)
     for fmt in formats:
@@ -613,7 +591,10 @@ def export_one_course(
             header_comment=f"# Exported from course {course_id} — schema matches `canvas assignment_groups apply`\n",
             policy=policy,
         ):
-            print(f"wrote {len(assignment_groups['assignment_groups'])} assignment groups -> {path}")
+            msg = f"wrote {len(assignment_groups['assignment_groups'])} assignment groups -> {path}"
+            print(msg)
+            if log:
+                log.write(msg)
 
     assignments = export_assignments(c, course_id)
     for fmt in formats:
@@ -624,15 +605,21 @@ def export_one_course(
             header_comment=f"# Exported from course {course_id} — schema matches `canvas assignments apply`\n",
             policy=policy,
         ):
-            print(f"wrote {len(assignments['assignments'])} assignments -> {path}")
+            msg = f"wrote {len(assignments['assignments'])} assignments -> {path}"
+            print(msg)
+            if log:
+                log.write(msg)
 
-    pages = export_pages(c, course_id, verbose=verbose)
+    pages = export_pages(c, course_id, verbose=verbose, log=log)
     for fmt in formats:
         path = os.path.join(out, f"pages.{_ext(fmt)}")
         if write_with_confirmation(
             pages, path, header_comment=f"# Exported from course {course_id} — schema matches `canvas pages apply`\n", policy=policy
         ):
-            print(f"wrote {len(pages['pages'])} pages -> {path}")
+            msg = f"wrote {len(pages['pages'])} pages -> {path}"
+            print(msg)
+            if log:
+                log.write(msg)
 
     announcements = export_announcements(c, course_id)
     for fmt in formats:
@@ -643,7 +630,10 @@ def export_one_course(
             header_comment=f"# Exported from course {course_id} — schema matches `canvas announcements apply`\n",
             policy=policy,
         ):
-            print(f"wrote {len(announcements['announcements'])} announcements -> {path}")
+            msg = f"wrote {len(announcements['announcements'])} announcements -> {path}"
+            print(msg)
+            if log:
+                log.write(msg)
 
     modules = export_modules(c, course_id)
     total_items = sum(len(m["items"]) for m in modules["modules"])
@@ -660,7 +650,10 @@ def export_one_course(
             ),
             policy=policy,
         ):
-            print(f"wrote {len(modules['modules'])} modules / {total_items} items -> {path}")
+            msg = f"wrote {len(modules['modules'])} modules / {total_items} items -> {path}"
+            print(msg)
+            if log:
+                log.write(msg)
 
     if pull_all_submissions:
         assignments = c.get(f"courses/{course_id}/assignments", params={"per_page": 100})
@@ -678,6 +671,7 @@ def export_one_course(
                 verbose=verbose,
                 policy=policy,
                 new_only=new_only_submissions,
+                log=log,
             )
 
 
@@ -778,16 +772,18 @@ def main(argv=None):
         if len(course_ids) > 1:
             print(f"\n=== [{i + 1}/{len(course_ids)}] course {course_id} ===")
         try:
-            export_one_course(
-                c,
-                course_id,
-                out_parent,
-                verbose=verbose,
-                formats=formats,
-                policy=policy,
-                pull_all_submissions=args.submissions,
-                new_only_submissions=new_only,
-            )
+            with open_run_log(c, course_id, "course export", "export", dry_run=False, settings=settings) as log:
+                export_one_course(
+                    c,
+                    course_id,
+                    out_parent,
+                    verbose=verbose,
+                    formats=formats,
+                    policy=policy,
+                    pull_all_submissions=args.submissions,
+                    new_only_submissions=new_only,
+                    log=log,
+                )
         except CanvasError as e:
             print(f"course {course_id}: ERROR — {e}")
             failed.append(course_id)

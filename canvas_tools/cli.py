@@ -44,46 +44,64 @@ from canvas_tools.export_course import (
 from datetime import datetime
 from canvas_tools.progress import Progress
 from canvas_tools.settings import load_settings
+from canvas_tools.run_log import open_run_log, vprint
 
 
-def _write_single_yaml_export(args, c, export_fn, key, apply_cmd_name, **kwargs):
+def _write_single_yaml_export(args, c, export_fn, key, apply_cmd_name, log=None, forward_log=False, **kwargs):
+    if forward_log:
+        kwargs["log"] = log
     data = export_fn(c, args.course, **kwargs)
     if write_with_confirmation(
         data, args.out, header_comment=f"# Exported from course {args.course} — schema matches `canvas {apply_cmd_name} apply`\n"
     ):
-        print(f"wrote {len(data[key])} {key} -> {args.out}")
+        msg = f"wrote {len(data[key])} {key} -> {args.out}"
+        print(msg)
+        if log:
+            log.write(msg)
 
 
 def cmd_assignment_groups_export(args, c):
-    _write_single_yaml_export(args, c, export_assignment_groups, "assignment_groups", "assignment_groups")
+    settings = load_settings()
+    with open_run_log(c, args.course, "assignment_groups", "export", settings=settings) as log:
+        _write_single_yaml_export(args, c, export_assignment_groups, "assignment_groups", "assignment_groups", log=log)
 
 
 def cmd_assignments_export(args, c):
-    _write_single_yaml_export(args, c, export_assignments, "assignments", "assignments")
+    settings = load_settings()
+    with open_run_log(c, args.course, "assignments", "export", settings=settings) as log:
+        _write_single_yaml_export(args, c, export_assignments, "assignments", "assignments", log=log)
 
 
 def cmd_pages_export(args, c):
-    _write_single_yaml_export(args, c, export_pages, "pages", "pages", verbose=args.verbose)
+    settings = load_settings()
+    with open_run_log(c, args.course, "pages", "export", settings=settings) as log:
+        _write_single_yaml_export(args, c, export_pages, "pages", "pages", log=log, forward_log=True, verbose=args.verbose)
 
 
 def cmd_announcements_export(args, c):
-    _write_single_yaml_export(args, c, export_announcements, "announcements", "announcements")
+    settings = load_settings()
+    with open_run_log(c, args.course, "announcements", "export", settings=settings) as log:
+        _write_single_yaml_export(args, c, export_announcements, "announcements", "announcements", log=log)
 
 
 def cmd_modules_export(args, c):
-    data = export_modules(c, args.course)
-    if write_with_confirmation(
-        data,
-        args.out,
-        header_comment=(
-            f"# Exported from course {args.course} — schema matches `canvas modules apply`\n"
-            "# `modules apply` treats this file as the exact, complete set of modules and\n"
-            "# items — a module or item missing from this file gets DELETED from the course,\n"
-            "# not just left alone. Always --dry-run before applying an edited copy of this file.\n"
-        ),
-    ):
-        total_items = sum(len(m["items"]) for m in data["modules"])
-        print(f"wrote {len(data['modules'])} modules / {total_items} items -> {args.out}")
+    settings = load_settings()
+    with open_run_log(c, args.course, "modules", "export", settings=settings) as log:
+        data = export_modules(c, args.course)
+        if write_with_confirmation(
+            data,
+            args.out,
+            header_comment=(
+                f"# Exported from course {args.course} — schema matches `canvas modules apply`\n"
+                "# `modules apply` treats this file as the exact, complete set of modules and\n"
+                "# items — a module or item missing from this file gets DELETED from the course,\n"
+                "# not just left alone. Always --dry-run before applying an edited copy of this file.\n"
+            ),
+        ):
+            total_items = sum(len(m["items"]) for m in data["modules"])
+            msg = f"wrote {len(data['modules'])} modules / {total_items} items -> {args.out}"
+            print(msg)
+            log.write(msg)
 
 
 def cmd_courses_list(args, c):
@@ -496,7 +514,7 @@ def _conventional_export_path(file_path, kind):
     return os.path.join(directory, f"{kind}.{ext}")
 
 
-def _offer_resync(args, c, export_fn, kind, **export_kwargs):
+def _offer_resync(args, c, export_fn, kind, log=None, **export_kwargs):
     """After a real (non-dry-run) apply or delete completes, offer to
     immediately re-export Canvas's live state back to the course's
     conventional file(s) for this resource type — the same file/directory
@@ -547,9 +565,15 @@ def _offer_resync(args, c, export_fn, kind, **export_kwargs):
     for target in targets:
         if archive and os.path.exists(target):
             archived = _archive_existing(target)
-            print(f"archived old copy -> {archived!r}")
+            msg = f"archived old copy -> {archived!r}"
+            print(msg)
+            if log:
+                log.write(msg)
         dump_data(data, target, header_comment=f"# Exported from course {args.course} — schema matches `canvas {kind} apply`\n")
-        print(f"wrote {len(data[kind])} {kind} -> {target}")
+        msg = f"wrote {len(data[kind])} {kind} -> {target}"
+        print(msg)
+        if log:
+            log.write(msg)
 
 
 def cmd_assignment_groups_apply(args, c):
@@ -563,28 +587,32 @@ def cmd_assignment_groups_apply(args, c):
 
     existing = c.get(f"courses/{args.course}/assignment_groups", params={"per_page": 100})
 
-    progress = Progress(len(items), "assignment groups", verbose=args.verbose)
-    for item in items:
-        progress.step(item.get("name"))
-        name = item["name"]
-        body = {k: v for k, v in item.items() if k in ASSIGNMENT_GROUP_FIELDS and v is not None}
-        match = _find_assignment_group_by_name(existing, name)
-        if match:
-            if args.dry_run:
-                print(f"[dry-run] would UPDATE assignment group {match['id']!r}: {name}")
-                continue
-            c.put(f"courses/{args.course}/assignment_groups/{match['id']}", json=body)
-            if args.verbose:
-                print(f"updated: {name} (id={match['id']})")
-        else:
-            if args.dry_run:
-                print(f"[dry-run] would CREATE assignment group: {name}")
-                continue
-            created = c.post(f"courses/{args.course}/assignment_groups", json=body)
-            if args.verbose:
-                print(f"created: {name} (id={created['id']})")
-    progress.done()
-    _offer_resync(args, c, export_assignment_groups, "assignment_groups")
+    settings = load_settings()
+    with open_run_log(c, args.course, "assignment_groups", "apply", dry_run=args.dry_run, settings=settings) as log:
+        progress = Progress(len(items), "assignment groups", verbose=args.verbose, log=log)
+        for item in items:
+            progress.step(item.get("name"))
+            name = item["name"]
+            body = {k: v for k, v in item.items() if k in ASSIGNMENT_GROUP_FIELDS and v is not None}
+            match = _find_assignment_group_by_name(existing, name)
+            if match:
+                if args.dry_run:
+                    msg = f"[dry-run] would UPDATE assignment group {match['id']!r}: {name}"
+                    print(msg)
+                    log.write(msg)
+                    continue
+                c.put(f"courses/{args.course}/assignment_groups/{match['id']}", json=body)
+                vprint(f"updated: {name} (id={match['id']})", args.verbose, log)
+            else:
+                if args.dry_run:
+                    msg = f"[dry-run] would CREATE assignment group: {name}"
+                    print(msg)
+                    log.write(msg)
+                    continue
+                created = c.post(f"courses/{args.course}/assignment_groups", json=body)
+                vprint(f"created: {name} (id={created['id']})", args.verbose, log)
+        progress.done()
+        _offer_resync(args, c, export_assignment_groups, "assignment_groups", log=log)
 
 
 def _confirm_wipe_everything(args, kind, total_count):
@@ -603,7 +631,7 @@ def _confirm_wipe_everything(args, kind, total_count):
     return True
 
 
-def _delete_flow(args, c, kind, key_field, id_field, list_path, find_fn, list_params=None):
+def _delete_flow(args, c, kind, key_field, id_field, list_path, find_fn, list_params=None, log=None):
     """Shared confirm-then-delete flow for pages/assignments/announcements
     `delete` commands: load names from --file, resolve each against a
     freshly fetched list from Canvas — never a local export — so a typo'd
@@ -639,9 +667,15 @@ def _delete_flow(args, c, kind, key_field, id_field, list_path, find_fn, list_pa
 
     if args.dry_run:
         for m in matches:
-            print(f"[dry-run] would DELETE {kind} ({id_field}={m[id_field]}): {m[key_field]}")
+            msg = f"[dry-run] would DELETE {kind} ({id_field}={m[id_field]}): {m[key_field]}"
+            print(msg)
+            if log:
+                log.write(msg)
         if wipes_everything:
-            print(f"[dry-run] NOTE: this is ALL {len(existing)} {kind}s in course {args.course} — none would remain.")
+            msg = f"[dry-run] NOTE: this is ALL {len(existing)} {kind}s in course {args.course} — none would remain."
+            print(msg)
+            if log:
+                log.write(msg)
         return None
 
     print(f"About to permanently delete {len(matches)} {kind}(s) from course {args.course}:")
@@ -702,6 +736,12 @@ def cmd_assignment_groups_delete(args, c):
         print("No assignment groups found in file.")
         return
 
+    settings = load_settings()
+    with open_run_log(c, args.course, "assignment_groups", "apply", dry_run=args.dry_run, settings=settings) as log:
+        _cmd_assignment_groups_delete_body(args, c, items, log)
+
+
+def _cmd_assignment_groups_delete_body(args, c, items, log):
     # Always pulled fresh from Canvas, never from a local export — a stale
     # export could point at a group that's already gone, or miss assignments
     # added to it since the export was taken.
@@ -740,11 +780,14 @@ def cmd_assignment_groups_delete(args, c):
         elif group_assignments and not delete_assignments:
             if args.dry_run:
                 names = ", ".join(a["name"] for a in group_assignments)
-                print(
+                msg = (
                     f"[dry-run] UNRESOLVED: assignment group {name!r} has {len(group_assignments)} assignment(s) "
                     f"({names}) and no move_assignments_to/delete_assignments in the file — will ask what to do "
                     f"with them on a real run."
                 )
+                print(msg)
+                if log:
+                    log.write(msg)
                 continue
             action, chosen_target = _resolve_group_assignments_interactively(existing_groups, group["id"], name, group_assignments)
             if action == "skip":
@@ -766,13 +809,25 @@ def cmd_assignment_groups_delete(args, c):
     if args.dry_run:
         for p in plan:
             if p["target"]:
-                print(f"[dry-run] would MOVE {len(p['assignments'])} assignment(s) from {p['group']['name']!r} -> {p['target']['name']!r}")
+                msg = f"[dry-run] would MOVE {len(p['assignments'])} assignment(s) from {p['group']['name']!r} -> {p['target']['name']!r}"
+                print(msg)
+                if log:
+                    log.write(msg)
             elif p["assignments"]:
                 names = ", ".join(a["name"] for a in p["assignments"])
-                print(f"[dry-run] would DELETE {len(p['assignments'])} assignment(s) along with the group: {names}")
-            print(f"[dry-run] would DELETE assignment group (id={p['group']['id']}): {p['group']['name']}")
+                msg = f"[dry-run] would DELETE {len(p['assignments'])} assignment(s) along with the group: {names}"
+                print(msg)
+                if log:
+                    log.write(msg)
+            msg = f"[dry-run] would DELETE assignment group (id={p['group']['id']}): {p['group']['name']}"
+            print(msg)
+            if log:
+                log.write(msg)
         if wipes_everything:
-            print(f"[dry-run] NOTE: this is ALL {len(existing_groups)} assignment groups in course {args.course} — none would remain.")
+            msg = f"[dry-run] NOTE: this is ALL {len(existing_groups)} assignment groups in course {args.course} — none would remain."
+            print(msg)
+            if log:
+                log.write(msg)
         return
 
     print(f"About to permanently delete {len(plan)} assignment group(s) from course {args.course}:")
@@ -810,17 +865,16 @@ def cmd_assignment_groups_delete(args, c):
             print("Aborted — nothing deleted.")
             return
 
-    progress = Progress(len(plan), "assignment groups (deleting)", verbose=args.verbose)
+    progress = Progress(len(plan), "assignment groups (deleting)", verbose=args.verbose, log=log)
     for p in plan:
         progress.step(p["group"]["name"])
         if p["target"]:
             c.delete(f"courses/{args.course}/assignment_groups/{p['group']['id']}?move_assignments_to={p['target']['id']}")
         else:
             c.delete(f"courses/{args.course}/assignment_groups/{p['group']['id']}")
-        if args.verbose:
-            print(f"deleted: {p['group']['name']} (id={p['group']['id']})")
+        vprint(f"deleted: {p['group']['name']} (id={p['group']['id']})", args.verbose, log)
     progress.done()
-    _offer_resync(args, c, export_assignment_groups, "assignment_groups")
+    _offer_resync(args, c, export_assignment_groups, "assignment_groups", log=log)
 
 
 def cmd_assignments_apply(args, c):
@@ -839,131 +893,131 @@ def cmd_assignments_apply(args, c):
     students_by_name = None
     sections_by_name = None
 
-    progress = Progress(len(items), "assignments", verbose=args.verbose)
-    for item in items:
-        progress.step(item.get("name"))
-        name = item["name"]
-        item = dict(item)
-        item.pop("id", None)  # read-only, written by export purely for `--assignment <id>` lookups
-        checkpoints_spec = item.pop("checkpoints", None)
-        overrides_spec = item.pop("overrides", None)
-        rubric_title = item.pop("rubric", None)
-        remove_rubric = item.pop("remove_rubric", False)
-        rename_from = item.pop("rename_from", None)
-        if overrides_spec is not None and students_by_name is None:
-            students_by_name = _course_students_by_name(c, args.course)
-            sections_by_name = _course_sections_by_name(c, args.course)
+    settings = load_settings()
+    with open_run_log(c, args.course, "assignments", "apply", dry_run=args.dry_run, settings=settings) as log:
+        def _p(msg):
+            print(msg)
+            log.write(msg)
 
-        if "assignment_group" in item:
-            group_name = item.pop("assignment_group")
-            if group_name is not None:
-                group = next((g for g in assignment_groups if g["name"].strip().lower() == group_name.strip().lower()), None)
-                if not group:
-                    raise CanvasError(f"assignment group {group_name!r} not found in course {args.course}")
-                item["assignment_group_id"] = group["id"]
-        if "group_category" in item:
-            cat_name = item.pop("group_category")
-            if cat_name is not None:
-                cat = next((g for g in group_categories if g["name"].strip().lower() == cat_name.strip().lower()), None)
-                if not cat:
-                    raise CanvasError(f"group set {cat_name!r} not found in course {args.course}")
-                item["group_category_id"] = cat["id"]
+        progress = Progress(len(items), "assignments", verbose=args.verbose, log=log)
+        for item in items:
+            progress.step(item.get("name"))
+            name = item["name"]
+            item = dict(item)
+            item.pop("id", None)  # read-only, written by export purely for `--assignment <id>` lookups
+            checkpoints_spec = item.pop("checkpoints", None)
+            overrides_spec = item.pop("overrides", None)
+            rubric_title = item.pop("rubric", None)
+            remove_rubric = item.pop("remove_rubric", False)
+            rename_from = item.pop("rename_from", None)
+            if overrides_spec is not None and students_by_name is None:
+                students_by_name = _course_students_by_name(c, args.course)
+                sections_by_name = _course_sections_by_name(c, args.course)
 
-        if item.get("description"):
-            item["description"] = clean_html(item["description"])
-        payload = {"assignment": {k: v for k, v in item.items() if v is not None}}
-        match, is_rename = _resolve_rename_target(existing, _find_assignment_by_name, rename_from, name, "name", "assignment", args.course)
-        if match:
-            if args.dry_run:
+            if "assignment_group" in item:
+                group_name = item.pop("assignment_group")
+                if group_name is not None:
+                    group = next((g for g in assignment_groups if g["name"].strip().lower() == group_name.strip().lower()), None)
+                    if not group:
+                        raise CanvasError(f"assignment group {group_name!r} not found in course {args.course}")
+                    item["assignment_group_id"] = group["id"]
+            if "group_category" in item:
+                cat_name = item.pop("group_category")
+                if cat_name is not None:
+                    cat = next((g for g in group_categories if g["name"].strip().lower() == cat_name.strip().lower()), None)
+                    if not cat:
+                        raise CanvasError(f"group set {cat_name!r} not found in course {args.course}")
+                    item["group_category_id"] = cat["id"]
+
+            if item.get("description"):
+                item["description"] = clean_html(item["description"])
+            payload = {"assignment": {k: v for k, v in item.items() if v is not None}}
+            match, is_rename = _resolve_rename_target(existing, _find_assignment_by_name, rename_from, name, "name", "assignment", args.course)
+            if match:
+                if args.dry_run:
+                    if is_rename:
+                        _p(f"[dry-run] would RENAME assignment {match['id']!r}: {match['name']!r} -> {name!r}")
+                    else:
+                        _p(f"[dry-run] would UPDATE assignment {match['id']!r}: {name}")
+                    if checkpoints_spec:
+                        _p(f"[dry-run]   would UPDATE checkpoints: {[cp['tag'] for cp in checkpoints_spec]}")
+                    if remove_rubric:
+                        _p(f"[dry-run]   would REMOVE current rubric (if any)")
+                    if rubric_title:
+                        _p(f"[dry-run]   would ATTACH rubric: {rubric_title}")
+                    if overrides_spec is not None:
+                        _apply_assignment_overrides(
+                            c, args.course, match["id"], overrides_spec, students_by_name, sections_by_name, dry_run=True
+                        )
+                        date_fields = {k: item[k] for k in ("due_at", "unlock_at", "lock_at") if item.get(k) is not None}
+                        if date_fields:
+                            _p(f"[dry-run]   would RESTORE dates after override sync: {date_fields}")
+                    continue
+                if payload["assignment"]:
+                    c.put(f"courses/{args.course}/assignments/{match['id']}", json=payload)
                 if is_rename:
-                    print(f"[dry-run] would RENAME assignment {match['id']!r}: {match['name']!r} -> {name!r}")
+                    vprint(f"renamed: {match['name']!r} -> {name!r} (id={match['id']})", args.verbose, log)
                 else:
-                    print(f"[dry-run] would UPDATE assignment {match['id']!r}: {name}")
+                    vprint(f"updated: {name} (id={match['id']})", args.verbose, log)
                 if checkpoints_spec:
-                    print(f"[dry-run]   would UPDATE checkpoints: {[cp['tag'] for cp in checkpoints_spec]}")
+                    _apply_discussion_checkpoints(c, args.course, match["id"], checkpoints_spec)
+                    vprint(f"  checkpoints updated: {[cp['tag'] for cp in checkpoints_spec]}", args.verbose, log)
                 if remove_rubric:
-                    print(f"[dry-run]   would REMOVE current rubric (if any)")
+                    removed = _remove_rubric_association(c, args.course, match["id"])
+                    vprint(f"  rubric removed: {name}" if removed else "  no rubric to remove", args.verbose, log)
                 if rubric_title:
-                    print(f"[dry-run]   would ATTACH rubric: {rubric_title}")
+                    _apply_rubric_association(c, args.course, match["id"], rubric_title, rubrics, item.get("use_rubric_for_grading", False))
+                    vprint(f"  rubric attached: {rubric_title}", args.verbose, log)
                 if overrides_spec is not None:
                     _apply_assignment_overrides(
-                        c, args.course, match["id"], overrides_spec, students_by_name, sections_by_name, dry_run=True
+                        c, args.course, match["id"], overrides_spec, students_by_name, sections_by_name, verbose=args.verbose
                     )
-                    date_fields = {k: item[k] for k in ("due_at", "unlock_at", "lock_at") if item.get(k) is not None}
-                    if date_fields:
-                        print(f"[dry-run]   would RESTORE dates after override sync: {date_fields}")
-                continue
-            if payload["assignment"]:
-                c.put(f"courses/{args.course}/assignments/{match['id']}", json=payload)
-            if args.verbose:
-                if is_rename:
-                    print(f"renamed: {match['name']!r} -> {name!r} (id={match['id']})")
-                else:
-                    print(f"updated: {name} (id={match['id']})")
-            if checkpoints_spec:
-                _apply_discussion_checkpoints(c, args.course, match["id"], checkpoints_spec)
-                if args.verbose:
-                    print(f"  checkpoints updated: {[cp['tag'] for cp in checkpoints_spec]}")
-            if remove_rubric:
-                removed = _remove_rubric_association(c, args.course, match["id"])
-                if args.verbose:
-                    print(f"  rubric removed: {name}" if removed else "  no rubric to remove")
-            if rubric_title:
-                _apply_rubric_association(c, args.course, match["id"], rubric_title, rubrics, item.get("use_rubric_for_grading", False))
-                if args.verbose:
-                    print(f"  rubric attached: {rubric_title}")
-            if overrides_spec is not None:
-                _apply_assignment_overrides(
-                    c, args.course, match["id"], overrides_spec, students_by_name, sections_by_name, verbose=args.verbose
-                )
-                _restore_assignment_dates_after_overrides(c, args.course, match["id"], item, verbose=args.verbose)
-        else:
-            if args.dry_run:
-                print(f"[dry-run] would CREATE assignment: {name}")
-                if checkpoints_spec:
-                    print(f"[dry-run]   would CREATE as a checkpointed discussion: {[cp['tag'] for cp in checkpoints_spec]}")
-                if rubric_title:
-                    print(f"[dry-run]   would ATTACH rubric: {rubric_title}")
-                if overrides_spec is not None:
-                    print(f"[dry-run]   would CREATE {len(overrides_spec)} override(s)")
-                    date_fields = {k: item[k] for k in ("due_at", "unlock_at", "lock_at") if item.get(k) is not None}
-                    if date_fields:
-                        print(f"[dry-run]   would RESTORE dates after override sync: {date_fields}")
-                continue
-            if checkpoints_spec:
-                created_id = _create_checkpointed_discussion(c, args.course, name, item, checkpoints_spec)
-                if args.verbose:
-                    print(f"created checkpointed discussion: {name} (id={created_id})")
+                    _restore_assignment_dates_after_overrides(c, args.course, match["id"], item, verbose=args.verbose)
             else:
-                created = c.post(f"courses/{args.course}/assignments", json=payload)
-                created_id = created["id"]
-                if args.verbose:
-                    print(f"created: {name} (id={created_id})")
-            if rubric_title:
-                _apply_rubric_association(c, args.course, created_id, rubric_title, rubrics, item.get("use_rubric_for_grading", False))
-                if args.verbose:
-                    print(f"  rubric attached: {rubric_title}")
-            if overrides_spec is not None:
-                _apply_assignment_overrides(
-                    c, args.course, created_id, overrides_spec, students_by_name, sections_by_name, verbose=args.verbose
-                )
-                _restore_assignment_dates_after_overrides(c, args.course, created_id, item, verbose=args.verbose)
-    progress.done()
-    _offer_resync(args, c, export_assignments, "assignments")
+                if args.dry_run:
+                    _p(f"[dry-run] would CREATE assignment: {name}")
+                    if checkpoints_spec:
+                        _p(f"[dry-run]   would CREATE as a checkpointed discussion: {[cp['tag'] for cp in checkpoints_spec]}")
+                    if rubric_title:
+                        _p(f"[dry-run]   would ATTACH rubric: {rubric_title}")
+                    if overrides_spec is not None:
+                        _p(f"[dry-run]   would CREATE {len(overrides_spec)} override(s)")
+                        date_fields = {k: item[k] for k in ("due_at", "unlock_at", "lock_at") if item.get(k) is not None}
+                        if date_fields:
+                            _p(f"[dry-run]   would RESTORE dates after override sync: {date_fields}")
+                    continue
+                if checkpoints_spec:
+                    created_id = _create_checkpointed_discussion(c, args.course, name, item, checkpoints_spec)
+                    vprint(f"created checkpointed discussion: {name} (id={created_id})", args.verbose, log)
+                else:
+                    created = c.post(f"courses/{args.course}/assignments", json=payload)
+                    created_id = created["id"]
+                    vprint(f"created: {name} (id={created_id})", args.verbose, log)
+                if rubric_title:
+                    _apply_rubric_association(c, args.course, created_id, rubric_title, rubrics, item.get("use_rubric_for_grading", False))
+                    vprint(f"  rubric attached: {rubric_title}", args.verbose, log)
+                if overrides_spec is not None:
+                    _apply_assignment_overrides(
+                        c, args.course, created_id, overrides_spec, students_by_name, sections_by_name, verbose=args.verbose
+                    )
+                    _restore_assignment_dates_after_overrides(c, args.course, created_id, item, verbose=args.verbose)
+        progress.done()
+        _offer_resync(args, c, export_assignments, "assignments", log=log)
 
 
 def cmd_assignments_delete(args, c):
-    matches = _delete_flow(args, c, "assignment", "name", "id", f"courses/{args.course}/assignments", _find_assignment_by_name)
-    if not matches:
-        return
-    progress = Progress(len(matches), "assignments (deleting)", verbose=args.verbose)
-    for m in matches:
-        progress.step(m["name"])
-        c.delete(f"courses/{args.course}/assignments/{m['id']}")
-        if args.verbose:
-            print(f"deleted: {m['name']} (id={m['id']})")
-    progress.done()
-    _offer_resync(args, c, export_assignments, "assignments")
+    settings = load_settings()
+    with open_run_log(c, args.course, "assignments", "apply", dry_run=args.dry_run, settings=settings) as log:
+        matches = _delete_flow(args, c, "assignment", "name", "id", f"courses/{args.course}/assignments", _find_assignment_by_name, log=log)
+        if not matches:
+            return
+        progress = Progress(len(matches), "assignments (deleting)", verbose=args.verbose, log=log)
+        for m in matches:
+            progress.step(m["name"])
+            c.delete(f"courses/{args.course}/assignments/{m['id']}")
+            vprint(f"deleted: {m['name']} (id={m['id']})", args.verbose, log)
+        progress.done()
+        _offer_resync(args, c, export_assignments, "assignments", log=log)
 
 
 def _find_page_by_title(pages, title):
@@ -988,64 +1042,69 @@ def cmd_pages_apply(args, c):
 
     existing = c.get(f"courses/{args.course}/pages", params={"per_page": 100})
 
-    progress = Progress(len(items), "pages", verbose=args.verbose)
-    for item in items:
-        progress.step(item.get("title"))
-        title = item["title"]
-        item = dict(item)
-        # Canvas's response field is `todo_date`, but the write param is
-        # `student_todo_at` (confirmed against source — `wiki_page[todo_date]`
-        # is silently ignored, it's not in the permitted params list at all).
-        # Setting it requires the write; clearing an existing one isn't
-        # supported here (consistent with the blank-means-omitted rule
-        # elsewhere in this tool — there's no way to distinguish "clear it"
-        # from "don't touch it" without breaking that rule).
-        todo_date = item.pop("todo_date", None)
-        rename_from = item.pop("rename_from", None)
-        body = {k: v for k, v in item.items() if k in PAGE_FIELDS and v is not None}
-        if todo_date is not None:
-            body["student_todo_at"] = todo_date
-            body["student_planner_checkbox"] = True
-        if body.get("body"):
-            body["body"] = clean_html(body["body"])
-        payload = {"wiki_page": body}
-        match, is_rename = _resolve_rename_target(existing, _find_page_by_title, rename_from, title, "title", "page", args.course)
-        if match:
-            if args.dry_run:
+    settings = load_settings()
+    with open_run_log(c, args.course, "pages", "apply", dry_run=args.dry_run, settings=settings) as log:
+        def _p(msg):
+            print(msg)
+            log.write(msg)
+
+        progress = Progress(len(items), "pages", verbose=args.verbose, log=log)
+        for item in items:
+            progress.step(item.get("title"))
+            title = item["title"]
+            item = dict(item)
+            # Canvas's response field is `todo_date`, but the write param is
+            # `student_todo_at` (confirmed against source — `wiki_page[todo_date]`
+            # is silently ignored, it's not in the permitted params list at all).
+            # Setting it requires the write; clearing an existing one isn't
+            # supported here (consistent with the blank-means-omitted rule
+            # elsewhere in this tool — there's no way to distinguish "clear it"
+            # from "don't touch it" without breaking that rule).
+            todo_date = item.pop("todo_date", None)
+            rename_from = item.pop("rename_from", None)
+            body = {k: v for k, v in item.items() if k in PAGE_FIELDS and v is not None}
+            if todo_date is not None:
+                body["student_todo_at"] = todo_date
+                body["student_planner_checkbox"] = True
+            if body.get("body"):
+                body["body"] = clean_html(body["body"])
+            payload = {"wiki_page": body}
+            match, is_rename = _resolve_rename_target(existing, _find_page_by_title, rename_from, title, "title", "page", args.course)
+            if match:
+                if args.dry_run:
+                    if is_rename:
+                        _p(f"[dry-run] would RENAME page {match['url']!r}: {match['title']!r} -> {title!r}")
+                    else:
+                        _p(f"[dry-run] would UPDATE page {match['url']!r}: {title}")
+                    continue
+                c.put(f"courses/{args.course}/pages/{match['url']}", json=payload)
                 if is_rename:
-                    print(f"[dry-run] would RENAME page {match['url']!r}: {match['title']!r} -> {title!r}")
+                    vprint(f"renamed: {match['title']!r} -> {title!r} (url={match['url']})", args.verbose, log)
                 else:
-                    print(f"[dry-run] would UPDATE page {match['url']!r}: {title}")
-                continue
-            c.put(f"courses/{args.course}/pages/{match['url']}", json=payload)
-            if args.verbose:
-                if is_rename:
-                    print(f"renamed: {match['title']!r} -> {title!r} (url={match['url']})")
-                else:
-                    print(f"updated: {title} (url={match['url']})")
-        else:
-            if args.dry_run:
-                print(f"[dry-run] would CREATE page: {title}")
-                continue
-            created = c.post(f"courses/{args.course}/pages", json=payload)
-            if args.verbose:
-                print(f"created: {title} (url={created['url']})")
-    progress.done()
-    _offer_resync(args, c, export_pages, "pages", verbose=args.verbose)
+                    vprint(f"updated: {title} (url={match['url']})", args.verbose, log)
+            else:
+                if args.dry_run:
+                    _p(f"[dry-run] would CREATE page: {title}")
+                    continue
+                created = c.post(f"courses/{args.course}/pages", json=payload)
+                vprint(f"created: {title} (url={created['url']})", args.verbose, log)
+        progress.done()
+        _offer_resync(args, c, export_pages, "pages", verbose=args.verbose, log=log)
 
 
 def cmd_pages_delete(args, c):
-    matches = _delete_flow(args, c, "page", "title", "url", f"courses/{args.course}/pages", _find_page_by_title)
-    if not matches:
-        return
-    progress = Progress(len(matches), "pages (deleting)", verbose=args.verbose)
-    for m in matches:
-        progress.step(m["title"])
-        c.delete(f"courses/{args.course}/pages/{m['url']}")
-        if args.verbose:
-            print(f"deleted: {m['title']} (url={m['url']})")
-    progress.done()
-    _offer_resync(args, c, export_pages, "pages", verbose=args.verbose)
+    settings = load_settings()
+    with open_run_log(c, args.course, "pages", "apply", dry_run=args.dry_run, settings=settings) as log:
+        matches = _delete_flow(args, c, "page", "title", "url", f"courses/{args.course}/pages", _find_page_by_title, log=log)
+        if not matches:
+            return
+        progress = Progress(len(matches), "pages (deleting)", verbose=args.verbose, log=log)
+        for m in matches:
+            progress.step(m["title"])
+            c.delete(f"courses/{args.course}/pages/{m['url']}")
+            vprint(f"deleted: {m['title']} (url={m['url']})", args.verbose, log)
+        progress.done()
+        _offer_resync(args, c, export_pages, "pages", verbose=args.verbose, log=log)
 
 
 def _find_announcement_by_title(announcements, title):
@@ -1091,62 +1150,68 @@ def cmd_announcements_apply(args, c):
 
     existing = c.get(f"courses/{args.course}/discussion_topics", params={"only_announcements": True, "per_page": 100})
 
-    progress = Progress(len(items), "announcements", verbose=args.verbose)
-    for item in items:
-        progress.step(item.get("title"))
-        title = item["title"]
-        item = dict(item)
-        rename_from = item.pop("rename_from", None)
-        body = {k: v for k, v in item.items() if k in ANNOUNCEMENT_FIELDS and v is not None}
-        body["is_announcement"] = True
-        if body.get("message"):
-            body["message"] = clean_html(body["message"])
-        match, is_rename = _resolve_rename_target(existing, _find_announcement_by_title, rename_from, title, "title", "announcement", args.course)
-        if match:
-            if args.dry_run:
+    settings = load_settings()
+    with open_run_log(c, args.course, "announcements", "apply", dry_run=args.dry_run, settings=settings) as log:
+        def _p(msg):
+            print(msg)
+            log.write(msg)
+
+        progress = Progress(len(items), "announcements", verbose=args.verbose, log=log)
+        for item in items:
+            progress.step(item.get("title"))
+            title = item["title"]
+            item = dict(item)
+            rename_from = item.pop("rename_from", None)
+            body = {k: v for k, v in item.items() if k in ANNOUNCEMENT_FIELDS and v is not None}
+            body["is_announcement"] = True
+            if body.get("message"):
+                body["message"] = clean_html(body["message"])
+            match, is_rename = _resolve_rename_target(existing, _find_announcement_by_title, rename_from, title, "title", "announcement", args.course)
+            if match:
+                if args.dry_run:
+                    if is_rename:
+                        _p(f"[dry-run] would RENAME announcement {match['id']}: {match['title']!r} -> {title!r}")
+                    else:
+                        _p(f"[dry-run] would UPDATE announcement {match['id']}: {title}")
+                    continue
+                c.put(f"courses/{args.course}/discussion_topics/{match['id']}", json=body)
                 if is_rename:
-                    print(f"[dry-run] would RENAME announcement {match['id']}: {match['title']!r} -> {title!r}")
+                    vprint(f"renamed: {match['title']!r} -> {title!r} (id={match['id']})", args.verbose, log)
                 else:
-                    print(f"[dry-run] would UPDATE announcement {match['id']}: {title}")
-                continue
-            c.put(f"courses/{args.course}/discussion_topics/{match['id']}", json=body)
-            if args.verbose:
-                if is_rename:
-                    print(f"renamed: {match['title']!r} -> {title!r} (id={match['id']})")
-                else:
-                    print(f"updated: {title} (id={match['id']})")
-        else:
-            if args.dry_run:
-                print(f"[dry-run] would CREATE announcement: {title}")
-                continue
-            created = c.post(f"courses/{args.course}/discussion_topics", json=body)
-            if args.verbose:
-                print(f"created: {title} (id={created['id']})")
-    progress.done()
-    _offer_resync(args, c, export_announcements, "announcements")
+                    vprint(f"updated: {title} (id={match['id']})", args.verbose, log)
+            else:
+                if args.dry_run:
+                    _p(f"[dry-run] would CREATE announcement: {title}")
+                    continue
+                created = c.post(f"courses/{args.course}/discussion_topics", json=body)
+                vprint(f"created: {title} (id={created['id']})", args.verbose, log)
+        progress.done()
+        _offer_resync(args, c, export_announcements, "announcements", log=log)
 
 
 def cmd_announcements_delete(args, c):
-    matches = _delete_flow(
-        args,
-        c,
-        "announcement",
-        "title",
-        "id",
-        f"courses/{args.course}/discussion_topics",
-        _find_announcement_by_title,
-        list_params={"only_announcements": True},
-    )
-    if not matches:
-        return
-    progress = Progress(len(matches), "announcements (deleting)", verbose=args.verbose)
-    for m in matches:
-        progress.step(m["title"])
-        c.delete(f"courses/{args.course}/discussion_topics/{m['id']}")
-        if args.verbose:
-            print(f"deleted: {m['title']} (id={m['id']})")
-    progress.done()
-    _offer_resync(args, c, export_announcements, "announcements")
+    settings = load_settings()
+    with open_run_log(c, args.course, "announcements", "apply", dry_run=args.dry_run, settings=settings) as log:
+        matches = _delete_flow(
+            args,
+            c,
+            "announcement",
+            "title",
+            "id",
+            f"courses/{args.course}/discussion_topics",
+            _find_announcement_by_title,
+            list_params={"only_announcements": True},
+            log=log,
+        )
+        if not matches:
+            return
+        progress = Progress(len(matches), "announcements (deleting)", verbose=args.verbose, log=log)
+        for m in matches:
+            progress.step(m["title"])
+            c.delete(f"courses/{args.course}/discussion_topics/{m['id']}")
+            vprint(f"deleted: {m['title']} (id={m['id']})", args.verbose, log)
+        progress.done()
+        _offer_resync(args, c, export_announcements, "announcements", log=log)
 
 
 def _module_item_payload(
@@ -1234,6 +1299,16 @@ def cmd_modules_apply(args, c):
         print("No modules found in file.")
         return
 
+    settings = load_settings()
+    with open_run_log(c, args.course, "modules", "apply", dry_run=args.dry_run, settings=settings) as log:
+        _cmd_modules_apply_body(args, c, modules, log)
+
+
+def _cmd_modules_apply_body(args, c, modules, log):
+    def _p(msg):
+        print(msg)
+        log.write(msg)
+
     existing_modules = c.get(f"courses/{args.course}/modules", params={"per_page": 100})
     existing_assignments = c.get(f"courses/{args.course}/assignments", params={"per_page": 100})
     existing_pages = c.get(f"courses/{args.course}/pages", params={"per_page": 100})
@@ -1280,23 +1355,22 @@ def cmd_modules_apply(args, c):
     wipes_everything = bool(existing_modules) and len(modules_to_delete) == len(existing_modules)
     if wipes_everything:
         if args.dry_run:
-            print(
+            _p(
                 f"[dry-run] NOTE: this file shares no module names with course {args.course} — "
                 f"applying it for real would delete ALL {len(existing_modules)} existing modules."
             )
         elif not _confirm_wipe_everything(args, "module", len(existing_modules)):
             return
 
-    with Progress(len(existing_modules), "modules (checking for deletions)", verbose=args.verbose) as progress:
+    with Progress(len(existing_modules), "modules (checking for deletions)", verbose=args.verbose, log=log) as progress:
         for m in existing_modules:
             progress.step(m["name"])
             if _effective_name(m["name"]) not in file_module_names:
                 if args.dry_run:
-                    print(f"[dry-run] would DELETE module (not in file): {m['name']} (id={m['id']})")
+                    _p(f"[dry-run] would DELETE module (not in file): {m['name']} (id={m['id']})")
                 else:
                     c.delete(f"courses/{args.course}/modules/{m['id']}")
-                    if args.verbose:
-                        print(f"deleted module (not in file): {m['name']} (id={m['id']})")
+                    vprint(f"deleted module (not in file): {m['name']} (id={m['id']})", args.verbose, log)
 
     kept_existing_modules = [m for m in existing_modules if _effective_name(m["name"]) in file_module_names]
 
@@ -1311,7 +1385,7 @@ def cmd_modules_apply(args, c):
     # Pass 1: ensure every module in the file exists, so real ids are known
     # before pass 2 resolves prerequisite names into prerequisite_module_ids.
     newly_created = set()
-    with Progress(len(modules), "modules (creating)", verbose=args.verbose) as progress:
+    with Progress(len(modules), "modules (creating)", verbose=args.verbose, log=log) as progress:
         for mod in modules:
             mname = mod["name"]
             progress.step(mname)
@@ -1319,15 +1393,14 @@ def cmd_modules_apply(args, c):
             if match:
                 if match["name"].strip().lower() != mname.strip().lower():
                     if args.dry_run:
-                        print(f"[dry-run] would RENAME module: {match['name']!r} -> {mname!r}")
+                        _p(f"[dry-run] would RENAME module: {match['name']!r} -> {mname!r}")
                     else:
                         c.put(f"courses/{args.course}/modules/{match['id']}", json={"module": {"name": mname}})
-                        if args.verbose:
-                            print(f"renamed module: {match['name']!r} -> {mname!r} (id={match['id']})")
-                elif args.verbose:
-                    print(f"module exists: {mname} (id={match['id']})")
+                        vprint(f"renamed module: {match['name']!r} -> {mname!r} (id={match['id']})", args.verbose, log)
+                else:
+                    vprint(f"module exists: {mname} (id={match['id']})", args.verbose, log)
             elif args.dry_run:
-                print(f"[dry-run] would CREATE module: {mname}")
+                _p(f"[dry-run] would CREATE module: {mname}")
                 module_ids[mname.strip().lower()] = None
                 newly_created.add(mname.strip().lower())
             else:
@@ -1338,12 +1411,11 @@ def cmd_modules_apply(args, c):
                 created = c.post(f"courses/{args.course}/modules", json={"module": {"name": mname}})
                 module_ids[mname.strip().lower()] = created["id"]
                 newly_created.add(mname.strip().lower())
-                if args.verbose:
-                    print(f"created module: {mname} (id={created['id']})")
+                vprint(f"created module: {mname} (id={created['id']})", args.verbose, log)
 
     # Pass 2: unlock_at / require_sequential_progress / prerequisites, now that
     # every module referenced by name (including forward references) has an id.
-    with Progress(len(modules), "modules (settings)", verbose=args.verbose) as progress:
+    with Progress(len(modules), "modules (settings)", verbose=args.verbose, log=log) as progress:
         for idx, mod in enumerate(modules):
             mname = mod["name"]
             progress.step(mname)
@@ -1382,13 +1454,12 @@ def cmd_modules_apply(args, c):
                 update_fields["prerequisite_module_ids"] = prereq_ids
 
             if args.dry_run:
-                print(f"[dry-run] would SET on {mname!r}: {update_fields}")
+                _p(f"[dry-run] would SET on {mname!r}: {update_fields}")
                 continue
             c.put(f"courses/{args.course}/modules/{module_id}", json={"module": update_fields})
-            if args.verbose:
-                print(f"  updated module settings: {mname} ({list(update_fields)})")
+            vprint(f"  updated module settings: {mname} ({list(update_fields)})", args.verbose, log)
 
-    with Progress(len(modules), "modules (syncing items)", verbose=args.verbose) as progress:
+    with Progress(len(modules), "modules (syncing items)", verbose=args.verbose, log=log) as progress:
         for mod in modules:
             mname = mod["name"]
             progress.step(mname)
@@ -1401,11 +1472,10 @@ def cmd_modules_apply(args, c):
             for existing_item in existing_items:
                 if existing_item.get("title", "").strip().lower() not in file_item_titles:
                     if args.dry_run:
-                        print(f"  [dry-run] would REMOVE item (not in file): {existing_item['title']}")
+                        _p(f"  [dry-run] would REMOVE item (not in file): {existing_item['title']}")
                     else:
                         c.delete(f"courses/{args.course}/modules/{module_id}/items/{existing_item['id']}")
-                        if args.verbose:
-                            print(f"  removed item (not in file): {existing_item['title']}")
+                        vprint(f"  removed item (not in file): {existing_item['title']}", args.verbose, log)
             existing_items = [
                 it for it in existing_items if it.get("title", "").strip().lower() in file_item_titles
             ]
@@ -1435,19 +1505,18 @@ def cmd_modules_apply(args, c):
                 if match_list:
                     existing_item = match_list.pop(0)
                     if args.dry_run:
-                        print(f"  [dry-run] would MOVE item to position {desired_pos}: {title}")
+                        _p(f"  [dry-run] would MOVE item to position {desired_pos}: {title}")
                     else:
                         c.put(
                             f"courses/{args.course}/modules/{module_id}/items/{existing_item['id']}",
                             json={"module_item": {"position": desired_pos}},
                         )
-                        if args.verbose:
-                            print(f"  moved item to position {desired_pos}: {title}")
+                        vprint(f"  moved item to position {desired_pos}: {title}", args.verbose, log)
                     current_order.remove(existing_item)
                     current_order.insert(idx, existing_item)
                 else:
                     if args.dry_run:
-                        print(f"  [dry-run] would ADD item at position {desired_pos}: {title} ({item['type']})")
+                        _p(f"  [dry-run] would ADD item at position {desired_pos}: {title} ({item['type']})")
                         current_order.insert(idx, {"title": title})
                         continue
                     payload = _module_item_payload(
@@ -1455,8 +1524,7 @@ def cmd_modules_apply(args, c):
                     )
                     payload["module_item"]["position"] = desired_pos
                     created_item = c.post(f"courses/{args.course}/modules/{module_id}/items", json=payload)
-                    if args.verbose:
-                        print(f"  added item at position {desired_pos}: {title}")
+                    vprint(f"  added item at position {desired_pos}: {title}", args.verbose, log)
                     if item.get("published") is not None:
                         # `published` is not accepted on item create at all (confirmed
                         # against source — only the update endpoint handles it), so it
@@ -1467,7 +1535,7 @@ def cmd_modules_apply(args, c):
                         )
                     current_order.insert(idx, created_item)
 
-    _offer_resync(args, c, export_modules, "modules")
+    _offer_resync(args, c, export_modules, "modules", log=log)
 
 
 def cmd_copy(args, c):
@@ -1794,35 +1862,46 @@ def cmd_archive_cleanup(args, c):
 
 
 def cmd_rubrics_export(args, c):
-    files = export_rubrics_csv(c, args.course, verbose=args.verbose)
-    os.makedirs(args.out, exist_ok=True)
-    written = 0
-    for filename, csv_text in files:
-        if write_text_with_confirmation(os.path.join(args.out, filename), csv_text, newline=""):
-            written += 1
-    print(f"wrote {written} rubric(s) -> {args.out}/")
+    settings = load_settings()
+    with open_run_log(c, args.course, "rubrics", "export", settings=settings) as log:
+        files = export_rubrics_csv(c, args.course, verbose=args.verbose, log=log)
+        os.makedirs(args.out, exist_ok=True)
+        written = 0
+        for filename, csv_text in files:
+            if write_text_with_confirmation(os.path.join(args.out, filename), csv_text, newline=""):
+                written += 1
+        msg = f"wrote {written} rubric(s) -> {args.out}/"
+        print(msg)
+        log.write(msg)
 
 
 def cmd_rubrics_import(args, c):
-    with open(args.file, "rb") as f:
-        csv_bytes = f.read()
-    if args.dry_run:
-        reader = csv.reader(io.StringIO(csv_bytes.decode()))
-        next(reader, None)  # header
-        names = sorted({row[0] for row in reader if row and row[0].strip()})
-        print(f"[dry-run] would import {len(names)} rubric(s): {names}")
-        print("note: Canvas's rubric CSV import always CREATES new rubrics — re-importing the same file creates duplicates, it does not update existing ones by title")
-        return
-    result = import_rubrics_csv(c, args.course, csv_bytes, filename=args.file, wait=not args.no_wait, verbose=args.verbose)
-    if args.no_wait:
-        print(f"import started: id={result['id']} (not waiting — activation is skipped without --wait, run again without --no-wait or activate manually in the Canvas UI)")
-    else:
-        print(f"import finished: {result['workflow_state']}")
-        activated = result.get("activated_rubrics", [])
-        if activated:
-            print(f"activated: {activated}")
+    settings = load_settings()
+    with open_run_log(c, args.course, "rubrics", "apply", dry_run=args.dry_run, settings=settings) as log:
+        with open(args.file, "rb") as f:
+            csv_bytes = f.read()
+        if args.dry_run:
+            reader = csv.reader(io.StringIO(csv_bytes.decode()))
+            next(reader, None)  # header
+            names = sorted({row[0] for row in reader if row and row[0].strip()})
+            log.write(f"[dry-run] would import {len(names)} rubric(s): {names}")
+            print(f"[dry-run] would import {len(names)} rubric(s): {names}")
+            print("note: Canvas's rubric CSV import always CREATES new rubrics — re-importing the same file creates duplicates, it does not update existing ones by title")
+            return
+        result = import_rubrics_csv(c, args.course, csv_bytes, filename=args.file, wait=not args.no_wait, verbose=args.verbose, log=log)
+        if args.no_wait:
+            msg = f"import started: id={result['id']} (not waiting — activation is skipped without --wait, run again without --no-wait or activate manually in the Canvas UI)"
+            print(msg)
+            log.write(msg)
         else:
-            print("note: no matching draft rubrics found to activate (already active, or names didn't match)")
+            print(f"import finished: {result['workflow_state']}")
+            activated = result.get("activated_rubrics", [])
+            if activated:
+                print(f"activated: {activated}")
+            else:
+                msg = "note: no matching draft rubrics found to activate (already active, or names didn't match)"
+                print(msg)
+                log.write(msg)
 
 
 def cmd_rubrics_update(args, c):
@@ -1838,15 +1917,21 @@ def cmd_rubrics_update(args, c):
             "`rubrics update` handles one rubric per file, see `rubrics export`"
         )
 
-    for title, criteria_list in rubrics_in_file.items():
-        if args.dry_run:
-            result = update_rubric_in_place(c, args.course, title, criteria_list, dry_run=True)
+    settings = load_settings()
+    with open_run_log(c, args.course, "rubrics", "apply", dry_run=args.dry_run, settings=settings) as log:
+        for title, criteria_list in rubrics_in_file.items():
+            if args.dry_run:
+                result = update_rubric_in_place(c, args.course, title, criteria_list, dry_run=True)
+                names = [a["title"] for a in result["assignments"]]
+                msg = f"[dry-run] would detach from {len(names)} assignment(s), update criteria, reattach: {names}"
+                print(msg)
+                log.write(msg)
+                return
+            result = update_rubric_in_place(c, args.course, title, criteria_list, verbose=args.verbose, log=log)
             names = [a["title"] for a in result["assignments"]]
-            print(f"[dry-run] would detach from {len(names)} assignment(s), update criteria, reattach: {names}")
-            return
-        result = update_rubric_in_place(c, args.course, title, criteria_list, verbose=args.verbose)
-        names = [a["title"] for a in result["assignments"]]
-        print(f"updated rubric {title!r} (id={result['rubric_id']}) — detached/reattached {len(names)} assignment(s): {names}")
+            msg = f"updated rubric {title!r} (id={result['rubric_id']}) — detached/reattached {len(names)} assignment(s): {names}"
+            print(msg)
+            log.write(msg)
 
 
 def _resolve_assignment(c, course_id, name):
@@ -1860,32 +1945,44 @@ def _resolve_assignment(c, course_id, name):
 
 
 def cmd_submissions_download(args, c):
-    assignment = _resolve_assignment(c, args.course, args.assignment)
-    written = download_submission_files(c, args.course, assignment["id"], args.out, verbose=args.verbose)
-    print(f"downloaded {written} file(s) -> {args.out}/")
+    settings = load_settings()
+    with open_run_log(c, args.course, "submissions", "export", settings=settings) as log:
+        assignment = _resolve_assignment(c, args.course, args.assignment)
+        written = download_submission_files(c, args.course, assignment["id"], args.out, verbose=args.verbose, log=log)
+        msg = f"downloaded {written} file(s) -> {args.out}/"
+        print(msg)
+        log.write(msg)
 
 
 def cmd_submissions_export(args, c):
-    assignment = _resolve_assignment(c, args.course, args.assignment)
-    base, _ext = os.path.splitext(args.out)
-    comment_attachments_dir = f"{base}_comment_attachments"
-    data, downloaded = export_submissions(c, args.course, assignment, comment_attachments_dir=comment_attachments_dir, verbose=args.verbose)
-    if write_with_confirmation(
-        data,
-        args.out,
-        header_comment=(
-            f"# Exported from course {args.course}, assignment {assignment['name']!r} — schema matches `canvas submissions apply`\n"
-            "# `comment` fields aren't included here (Canvas comments are an append-only stream, not\n"
-            "# an editable field) — add a `comment:` line under a student's entry yourself before\n"
-            "# `apply` to post a new one. Re-applying the same `comment:` twice posts it twice.\n"
-        ),
-    ):
-        print(f"wrote {len(data['submissions'])} submission(s) -> {args.out}")
-        if downloaded:
-            print(f"downloaded {downloaded} comment attachment(s) -> {comment_attachments_dir}/")
+    settings = load_settings()
+    with open_run_log(c, args.course, "submissions", "export", settings=settings) as log:
+        assignment = _resolve_assignment(c, args.course, args.assignment)
+        base, _ext = os.path.splitext(args.out)
+        comment_attachments_dir = f"{base}_comment_attachments"
+        data, downloaded = export_submissions(
+            c, args.course, assignment, comment_attachments_dir=comment_attachments_dir, verbose=args.verbose, log=log
+        )
+        if write_with_confirmation(
+            data,
+            args.out,
+            header_comment=(
+                f"# Exported from course {args.course}, assignment {assignment['name']!r} — schema matches `canvas submissions apply`\n"
+                "# `comment` fields aren't included here (Canvas comments are an append-only stream, not\n"
+                "# an editable field) — add a `comment:` line under a student's entry yourself before\n"
+                "# `apply` to post a new one. Re-applying the same `comment:` twice posts it twice.\n"
+            ),
+        ):
+            msg = f"wrote {len(data['submissions'])} submission(s) -> {args.out}"
+            print(msg)
+            log.write(msg)
+            if downloaded:
+                msg = f"downloaded {downloaded} comment attachment(s) -> {comment_attachments_dir}/"
+                print(msg)
+                log.write(msg)
 
 
-def _pull_all_assignments(c, course_id, parent_out, match=None, verbose=False, new_only=False, policy=None):
+def _pull_all_assignments(c, course_id, parent_out, match=None, verbose=False, new_only=False, policy=None, log=None):
     """Pull every downloadable-submission assignment in one course into
     `<parent_out>/<assignment name>_<id>/`, optionally filtered by `match`
     (a case-insensitive substring against each assignment's name). Shared
@@ -1914,6 +2011,7 @@ def _pull_all_assignments(c, course_id, parent_out, match=None, verbose=False, n
             verbose=verbose,
             policy=policy,
             new_only=new_only,
+            log=log,
         )
     return len(assignments)
 
@@ -1981,7 +2079,8 @@ def cmd_submissions_pull(args, c):
                 parent = os.path.join(args.out, _course_folder_name(course_id, co.get("course_code")))
             else:
                 parent = os.path.join(default_out_root, _course_folder_name(course_id, co.get("course_code")), "submissions")
-            total += _pull_all_assignments(c, course_id, parent, verbose=args.verbose, new_only=new_only, policy=policy)
+            with open_run_log(c, course_id, "submissions", "export", settings=settings) as log:
+                total += _pull_all_assignments(c, course_id, parent, verbose=args.verbose, new_only=new_only, policy=policy, log=log)
         if len(courses) > 1:
             print(f"\ndone: pulled {total} assignment(s) of submissions across {len(courses)} course(s)")
         return
@@ -1998,14 +2097,16 @@ def cmd_submissions_pull(args, c):
         # this branch's --match instead filters ASSIGNMENT names within the
         # one course already given — applying the course-shaped default here
         # would silently match zero assignments most of the time.
-        _pull_all_assignments(c, args.course, parent, match=args.match, verbose=args.verbose, new_only=new_only, policy=policy)
+        with open_run_log(c, args.course, "submissions", "export", settings=settings) as log:
+            _pull_all_assignments(c, args.course, parent, match=args.match, verbose=args.verbose, new_only=new_only, policy=policy, log=log)
         return
 
     if not args.assignment:
         raise CanvasError("--assignment is required unless --all is given")
-    assignment = _resolve_assignment(c, args.course, args.assignment)
-    out_dir = args.out or assignment_dir_name(assignment)
-    pull_submissions(c, args.course, assignment, out_dir, verbose=args.verbose, new_only=new_only)
+    with open_run_log(c, args.course, "submissions", "export", settings=settings) as log:
+        assignment = _resolve_assignment(c, args.course, args.assignment)
+        out_dir = args.out or assignment_dir_name(assignment)
+        pull_submissions(c, args.course, assignment, out_dir, verbose=args.verbose, new_only=new_only, log=log)
 
 
 def cmd_submissions_apply(args, c):
@@ -2022,16 +2123,22 @@ def cmd_submissions_apply(args, c):
         raise CanvasError("no assignment name in file and no --assignment given")
     assignment = _resolve_assignment(c, args.course, assignment_name)
 
-    updated = apply_submissions(c, args.course, assignment["id"], entries, dry_run=args.dry_run, verbose=args.verbose)
-    if args.dry_run:
-        print(f"[dry-run] would update {updated} submission(s)")
-    else:
-        print(f"updated {updated} submission(s)")
-        # Unlike assignments/pages/announcements/modules apply, there's no
-        # canonical per-course filename to auto-resync here — submissions
-        # export files are named per batch (chapter1.yaml, rooney.yaml, ...),
-        # so re-syncing has to stay a manual step.
-        print("run `submissions export` (subx) again to refresh your local copy with this course's current grades/comments.")
+    settings = load_settings()
+    with open_run_log(c, args.course, "submissions", "apply", dry_run=args.dry_run, settings=settings) as log:
+        updated = apply_submissions(c, args.course, assignment["id"], entries, dry_run=args.dry_run, verbose=args.verbose, log=log)
+        if args.dry_run:
+            msg = f"[dry-run] would update {updated} submission(s)"
+            print(msg)
+            log.write(msg)
+        else:
+            msg = f"updated {updated} submission(s)"
+            print(msg)
+            log.write(msg)
+            # Unlike assignments/pages/announcements/modules apply, there's no
+            # canonical per-course filename to auto-resync here — submissions
+            # export files are named per batch (chapter1.yaml, rooney.yaml, ...),
+            # so re-syncing has to stay a manual step.
+            print("run `submissions export` (subx) again to refresh your local copy with this course's current grades/comments.")
 
 
 def build_parser():

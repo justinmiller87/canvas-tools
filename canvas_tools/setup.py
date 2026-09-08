@@ -116,7 +116,20 @@ def main():
 
     verbose = _ask_yes_no("Default to --verbose (per-item log instead of a progress bar)?", current["verbose"])
 
-    settings = {"formats": formats, "out_dir": out_dir, "match": match, "new_only": new_only, "verbose": verbose}
+    logging_enabled = _ask_yes_no(
+        "Write always-verbose run logs to each course's logs/ folder (apply.log, apply_dry_run.log, "
+        "export.log) on every apply/export command?",
+        current["logging"],
+    )
+
+    settings = {
+        "formats": formats,
+        "out_dir": out_dir,
+        "match": match,
+        "new_only": new_only,
+        "verbose": verbose,
+        "logging": logging_enabled,
+    }
     save_settings(settings)
     print(f"\nsaved -> {settings_path()}")
 

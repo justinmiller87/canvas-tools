@@ -17,9 +17,15 @@ class Progress:
     Non-interactive stdout (piped/redirected) falls back to occasional
     plain-text progress lines instead of \\r-redraws, since carriage
     returns just clutter a log file or captured output.
+
+    `log` (a `canvas_tools.run_log.RunLog`/`_NullLog`, or anything with a
+    `.write(str)`) is a second, independent sink: every `step()` writes a
+    full "[i/total] label: detail" line there unconditionally, regardless
+    of `verbose` — a run log is always as detailed as `--verbose` console
+    output, even when the console itself is showing the progress bar.
     """
 
-    def __init__(self, total, label, verbose=False, file=None):
+    def __init__(self, total, label, verbose=False, file=None, log=None):
         self.total = total
         self.label = label
         self.verbose = verbose
@@ -27,9 +33,15 @@ class Progress:
         self.file = file or sys.stdout
         self.interactive = self.file.isatty()
         self._last_plain_pct = -1
+        self.log = log
 
     def step(self, detail=""):
         self.count += 1
+        if self.log is not None:
+            line = f"[{self.count}/{self.total}] {self.label}"
+            if detail:
+                line += f": {detail}"
+            self.log.write(line)
         if self.verbose or self.total == 0:
             return
         if self.interactive:

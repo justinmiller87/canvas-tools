@@ -24,6 +24,7 @@ DEFAULTS = {
     "match": None,
     "new_only": False,
     "verbose": False,
+    "logging": False,
 }
 
 

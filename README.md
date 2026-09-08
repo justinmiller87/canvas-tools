@@ -160,6 +160,10 @@ What it asks:
   clear-and-redownload even when this default is on.
 - **Default `--verbose`** — every command that supports `--verbose` prints
   a per-item log instead of a progress bar by default. Default: off.
+- **Run logging** — write an always-verbose record of every apply/export
+  command to that course's own `logs/` folder, regardless of whether you
+  ran with `--verbose`. Default: off. See "Run logs" below for what gets
+  written and where.
 
 An explicit flag on the command line always overrides the stored setting
 for that one run — nothing here removes any flag, it only changes what
@@ -174,6 +178,49 @@ shortcut — offers to **A**rchive them (same `archive/` mechanism as the
 them in place. This only runs when `setup` itself detects a changed format
 preference — not on every `course export` run — so routine exports stay
 fast.
+
+### Run logs
+
+Turn on "Run logging" in `canvas_tools setup` and every apply/export/
+delete/import/update/download/pull command writes an always-verbose
+record of what it did to that course's own `logs/` folder — a plain-text
+history that stays complete even on days you didn't bother with
+`--verbose` at the console.
+
+Four files, one per (action, dry-run) combination, at
+`<exports>/course_<id>_<course code>/logs/`:
+
+- `apply.log` — every real (non-dry-run) apply/delete/import/update run
+  for that course: assignment_groups, assignments, pages, announcements,
+  modules, rubrics, submissions — all funnel into this one file, not a
+  separate log per resource, so it reads as a single chronological history
+  of everything actually done to the course.
+- `apply_dry_run.log` — the same, for `--dry-run` runs. Every planned
+  change line (`[dry-run] would CREATE/UPDATE/DELETE ...`) is captured
+  here even when the console itself wasn't run with `--verbose`.
+- `export.log` — every export/download/pull run (read-only, nothing
+  mutated) for that course.
+- There's no `export_dry_run.log` — export commands only ever read from
+  Canvas, so a dry-run concept doesn't apply to them.
+
+Each run appends a timestamped header (`=== 2026-09-08 14:32:10 —
+assignments apply — course 10001 ===`) rather than overwriting, so the
+file builds into a running history across every command you've run
+against that course over time, not just the most recent one.
+
+A course that's already been exported locally gets its `logs/` folder
+right there, no extra API call. A command run directly against a course
+that's never been exported (no `exports/course_<id>_*/` folder yet)
+creates one — the same one `course export` would create — purely to hold
+the logs, with one extra API call to look up the course code for naming.
+
+A command that sweeps multiple courses in one invocation (`course export
+--all`, `submissions pull --all` without `--course`, `annpost` posting to
+several courses) writes each course's own outcome to that course's own
+log — never one shared log mixing courses together.
+
+Off by default; nothing here does anything until you turn it on via
+`canvas_tools setup`.
 
 ## Commands
 

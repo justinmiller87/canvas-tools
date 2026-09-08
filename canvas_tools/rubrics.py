@@ -38,6 +38,7 @@ import time
 
 from canvas_tools.client import CanvasError
 from canvas_tools.progress import Progress
+from canvas_tools.run_log import vprint
 
 
 def _safe_filename(title):
@@ -45,18 +46,17 @@ def _safe_filename(title):
     return f"{safe}.csv"
 
 
-def export_rubrics_csv(c, course_id, verbose=False):
+def export_rubrics_csv(c, course_id, verbose=False, log=None):
     """One CSV file per rubric — not one file for the whole course. Editing a
     single rubric (the common case, e.g. via `rubrics update`) means editing
     one small, unambiguous file, not picking the right rows out of a big one
     shared across every rubric in the course."""
     rubrics = c.get(f"courses/{course_id}/rubrics", params={"per_page": 100})
     files = []
-    progress = Progress(len(rubrics), "rubrics", verbose=verbose)
+    progress = Progress(len(rubrics), "rubrics", verbose=verbose, log=log)
     for r in rubrics:
         full = c.get(f"courses/{course_id}/rubrics/{r['id']}")
-        if verbose:
-            print(f"  fetched: {full['title']}")
+        vprint(f"  fetched: {full['title']}", verbose, log)
         rows = []
         max_ratings = 0
         for criterion in full.get("data", []):
@@ -137,7 +137,7 @@ def activate_rubric(c, course_id, rubric_id):
     c.put(f"courses/{course_id}/rubrics/{rubric_id}", json=payload)
 
 
-def import_rubrics_csv(c, course_id, csv_bytes, filename="rubrics.csv", wait=True, poll_interval=1, timeout=60, verbose=False):
+def import_rubrics_csv(c, course_id, csv_bytes, filename="rubrics.csv", wait=True, poll_interval=1, timeout=60, verbose=False, log=None):
     resp = c._request(
         "POST",
         f"courses/{course_id}/rubrics/upload",
@@ -158,6 +158,8 @@ def import_rubrics_csv(c, course_id, csv_bytes, filename="rubrics.csv", wait=Tru
         elif sys.stdout.isatty():
             sys.stdout.write(".")
             sys.stdout.flush()
+        if log:
+            log.write(f"import status: {status['workflow_state']} ({status.get('progress', 0)}%)")
         if status["workflow_state"] in ("succeeded", "succeeded_with_errors", "failed"):
             if status["workflow_state"] == "failed" or status.get("error_count"):
                 raise CanvasError(f"rubric import failed: {status.get('error_data')}")
@@ -186,6 +188,8 @@ def import_rubrics_csv(c, course_id, csv_bytes, filename="rubrics.csv", wait=Tru
             activated.append(r["title"])
 
     status["activated_rubrics"] = activated
+    if log:
+        log.write(f"import finished: {status['workflow_state']} — activated: {activated}")
     return status
 
 
@@ -235,7 +239,7 @@ def _criteria_list_to_payload_dict(criteria_list):
     }
 
 
-def update_rubric_in_place(c, course_id, rubric_title, criteria_list, dry_run=False, verbose=False):
+def update_rubric_in_place(c, course_id, rubric_title, criteria_list, dry_run=False, verbose=False, log=None):
     """Update an existing rubric's criteria.
 
     Earlier version of this tried to pre-emptively detach every assignment
@@ -284,7 +288,7 @@ def update_rubric_in_place(c, course_id, rubric_title, criteria_list, dry_run=Fa
     # association id, BEFORE submitting the edit — need both to restore
     # them later regardless of which rubric id ends up holding the title.
     current_assoc = {}
-    with Progress(len(assignments), "reading current settings", verbose=verbose) as progress:
+    with Progress(len(assignments), "reading current settings", verbose=verbose, log=log) as progress:
         for a in assignments:
             full = c.get(f"courses/{course_id}/assignments/{a['id']}")
             assoc = c.graphql(
@@ -296,8 +300,7 @@ def update_rubric_in_place(c, course_id, rubric_title, criteria_list, dry_run=Fa
                 "association_id": assoc["_id"] if assoc else None,
             }
             progress.step(a["title"])
-            if verbose:
-                print(f"  read: {a['title']}")
+            vprint(f"  read: {a['title']}", verbose, log)
 
     current = c.get(f"courses/{course_id}/rubrics/{old_id}")
     payload = {
@@ -318,13 +321,12 @@ def update_rubric_in_place(c, course_id, rubric_title, criteria_list, dry_run=Fa
     # Forked — the fork holds an auto-renamed title (e.g. "X (1)") since the
     # old rubric still holds the clean one at this point. Detach the old
     # rubric from everywhere it was.
-    with Progress(len(current_assoc), "detaching", verbose=verbose) as progress:
+    with Progress(len(current_assoc), "detaching", verbose=verbose, log=log) as progress:
         for aid, info in current_assoc.items():
             if info["association_id"]:
                 c.delete(f"courses/{course_id}/rubric_associations/{info['association_id']}")
             progress.step(info["title"])
-            if verbose:
-                print(f"  detached: {info['title']}")
+            vprint(f"  detached: {info['title']}", verbose, log)
 
     # Don't assume the old rubric disappears on its own — the exact
     # uncertainty that caused the original incident. Check explicitly and
@@ -350,7 +352,7 @@ def update_rubric_in_place(c, course_id, rubric_title, criteria_list, dry_run=Fa
         },
     )
 
-    with Progress(len(current_assoc), "reattaching", verbose=verbose) as progress:
+    with Progress(len(current_assoc), "reattaching", verbose=verbose, log=log) as progress:
         for aid, info in current_assoc.items():
             c.post(
                 f"courses/{course_id}/rubric_associations",
@@ -365,7 +367,6 @@ def update_rubric_in_place(c, course_id, rubric_title, criteria_list, dry_run=Fa
                 },
             )
             progress.step(info["title"])
-            if verbose:
-                print(f"  reattached: {info['title']}")
+            vprint(f"  reattached: {info['title']}", verbose, log)
 
     return {"rubric_id": new_id, "assignments": list(current_assoc.values()), "dry_run": False, "forked": True}

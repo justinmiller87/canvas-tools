@@ -12,6 +12,7 @@ import shutil
 import zipfile
 
 from canvas_tools.progress import Progress
+from canvas_tools.run_log import vprint
 
 SUBMISSION_INCLUDES = ["user", "submission_comments", "rubric_assessment", "attachments"]
 
@@ -72,7 +73,7 @@ def assignment_dir_name(assignment):
     return f"{assignment['id']}_{safe}" if safe else str(assignment["id"])
 
 
-def pull_submissions(c, course_id, assignment, out_dir, verbose=False, policy=None, new_only=False):
+def pull_submissions(c, course_id, assignment, out_dir, verbose=False, policy=None, new_only=False, log=None):
     """`download` + `export` combined into one `out_dir`: the assignment's
     submission files, the exported YAML, and any comment attachments.
     Shared by `submissions pull` (single assignment or --all) and `course
@@ -98,13 +99,16 @@ def pull_submissions(c, course_id, assignment, out_dir, verbose=False, policy=No
 
     os.makedirs(out_dir, exist_ok=True)
     written = download_submission_files(
-        c, course_id, assignment["id"], os.path.join(out_dir, "submission_files"), verbose=verbose, new_only=new_only
+        c, course_id, assignment["id"], os.path.join(out_dir, "submission_files"), verbose=verbose, new_only=new_only, log=log
     )
-    print(f"downloaded {written} submission file(s) -> {out_dir}/submission_files/")
+    msg = f"downloaded {written} submission file(s) -> {out_dir}/submission_files/"
+    print(msg)
+    if log:
+        log.write(msg)
 
     comment_attachments_dir = os.path.join(out_dir, "comment_attachments")
     data, downloaded = export_submissions(
-        c, course_id, assignment, comment_attachments_dir=comment_attachments_dir, verbose=verbose, new_only=new_only
+        c, course_id, assignment, comment_attachments_dir=comment_attachments_dir, verbose=verbose, new_only=new_only, log=log
     )
     yaml_path = os.path.join(out_dir, "submissions.yaml")
     if write_with_confirmation(
@@ -118,9 +122,15 @@ def pull_submissions(c, course_id, assignment, out_dir, verbose=False, policy=No
         ),
         policy=policy,
     ):
-        print(f"wrote {len(data['submissions'])} submission(s) -> {yaml_path}")
+        msg = f"wrote {len(data['submissions'])} submission(s) -> {yaml_path}"
+        print(msg)
+        if log:
+            log.write(msg)
         if downloaded:
-            print(f"downloaded {downloaded} comment attachment(s) -> {comment_attachments_dir}/")
+            msg = f"downloaded {downloaded} comment attachment(s) -> {comment_attachments_dir}/"
+            print(msg)
+            if log:
+                log.write(msg)
     return len(data["submissions"]), downloaded
 
 
@@ -153,7 +163,7 @@ def list_submissions(c, course_id, assignment_id, extra_includes=None):
     )
 
 
-def download_submission_files(c, course_id, assignment_id, out_dir, verbose=False, new_only=False):
+def download_submission_files(c, course_id, assignment_id, out_dir, verbose=False, new_only=False, log=None):
     """Save every file a student attached to their submission into
     `out_dir`, across every attempt (not just their current/latest one) —
     a resubmission can reuse the same filename on a later attempt, which
@@ -212,7 +222,7 @@ def download_submission_files(c, course_id, assignment_id, out_dir, verbose=Fals
             shutil.rmtree(out_dir)
         os.makedirs(out_dir, exist_ok=True)
     downloaded = 0
-    with Progress(len(submissions), "submissions", verbose=verbose) as progress:
+    with Progress(len(submissions), "submissions", verbose=verbose, log=log) as progress:
         for s in submissions:
             user = s.get("user") or {}
             student_name = user.get("sortable_name") or user.get("name") or f"user {s.get('user_id')}"
@@ -242,9 +252,8 @@ def download_submission_files(c, course_id, assignment_id, out_dir, verbose=Fals
                         dest = os.path.join(out_dir, f"{prefix}_{att['filename']}")
                     _download_and_extract(c, att["url"], dest)
                     downloaded += 1
-                    if verbose:
-                        label = f"{student_name} attempt {h.get('attempt')}" if multi_attempt else student_name
-                        print(f"  downloaded: {label} -> {att['filename']}")
+                    label = f"{student_name} attempt {h.get('attempt')}" if multi_attempt else student_name
+                    vprint(f"  downloaded: {label} -> {att['filename']}", verbose, log)
                 known_attempts.add(key)
             progress.step(student_name)
     if new_only:
@@ -253,7 +262,7 @@ def download_submission_files(c, course_id, assignment_id, out_dir, verbose=Fals
     return downloaded
 
 
-def export_submissions(c, course_id, assignment, comment_attachments_dir=None, verbose=False, new_only=False):
+def export_submissions(c, course_id, assignment, comment_attachments_dir=None, verbose=False, new_only=False, log=None):
     """Grades, rubric assessments, comments, and submission metadata for one
     assignment -> the YAML schema `submissions apply` reads back. `user_id`
     is the authoritative key for `apply` (student names aren't guaranteed
@@ -288,7 +297,7 @@ def export_submissions(c, course_id, assignment, comment_attachments_dir=None, v
     submissions = list_submissions(c, course_id, assignment["id"])
     out = []
     downloaded = 0
-    with Progress(len(submissions), "submissions", verbose=verbose) as progress:
+    with Progress(len(submissions), "submissions", verbose=verbose, log=log) as progress:
         for s in submissions:
             if s.get("workflow_state") == "unsubmitted" and s.get("score") is None:
                 continue
@@ -342,8 +351,7 @@ def export_submissions(c, course_id, assignment, comment_attachments_dir=None, v
                                     continue
                                 _download_and_extract(c, a["url"], dest)
                                 downloaded += 1
-                                if verbose:
-                                    print(f"  downloaded comment attachment: {student_name} -> {a['filename']}")
+                                vprint(f"  downloaded comment attachment: {student_name} -> {a['filename']}", verbose, log)
                     comment_items.append(comment_item)
                 item["comments"] = comment_items
             out.append(item)
@@ -355,7 +363,7 @@ def export_submissions(c, course_id, assignment, comment_attachments_dir=None, v
     return result, downloaded
 
 
-def apply_submissions(c, course_id, assignment_id, entries, dry_run=False, verbose=False):
+def apply_submissions(c, course_id, assignment_id, entries, dry_run=False, verbose=False, log=None):
     """Push `posted_grade`, `rubric_assessment`, and/or a new `comment`
     (optionally with `comment_attachments`) back to Canvas for each entry —
     one PUT per student carrying whichever of those fields are present in
@@ -388,7 +396,7 @@ def apply_submissions(c, course_id, assignment_id, entries, dry_run=False, verbo
     Returns the number of students actually updated (or that would be, in
     dry-run)."""
     updated = 0
-    with Progress(len(entries), "submissions", verbose=verbose) as progress:
+    with Progress(len(entries), "submissions", verbose=verbose, log=log) as progress:
         for entry in entries:
             student = entry.get("student", f"user {entry.get('user_id')}")
             progress.step(student)
@@ -428,18 +436,19 @@ def apply_submissions(c, course_id, assignment_id, entries, dry_run=False, verbo
                 continue
 
             if dry_run:
-                print(f"[dry-run] would UPDATE submission for {student} (user_id={user_id}): {body}")
+                msg = f"[dry-run] would UPDATE submission for {student} (user_id={user_id}): {body}"
+                print(msg)
+                if log:
+                    log.write(msg)
                 updated += 1
                 continue
 
             if attachment_paths:
                 upload_path = f"courses/{course_id}/assignments/{assignment_id}/submissions/{user_id}/comments/files"
                 body["comment"]["file_ids"] = [c.upload_file(upload_path, path)["id"] for path in attachment_paths]
-                if verbose:
-                    print(f"  uploaded {len(attachment_paths)} attachment(s) for {student}")
+                vprint(f"  uploaded {len(attachment_paths)} attachment(s) for {student}", verbose, log)
 
             c.put(f"courses/{course_id}/assignments/{assignment_id}/submissions/{user_id}", json=body)
             updated += 1
-            if verbose:
-                print(f"  updated: {student}")
+            vprint(f"  updated: {student}", verbose, log)
     return updated

@@ -28,7 +28,7 @@ Pattern: bare resource name = `apply` (the common case), `x` suffix =
 | `rubex`               | `python3 -m canvas_tools.cli rubrics export`                                                      |
 | `rubimp`              | `python3 -m canvas_tools.cli rubrics import`                                                      |
 | `rubupd`              | `python3 -m canvas_tools.cli rubrics update`                                                      |
-| `setup`               | `python3 -m canvas_tools.setup` (interactive local settings wizard — format, out dir, --match, --new-only, --verbose defaults) |
+| `setup`               | `python3 -m canvas_tools.setup` (interactive local settings wizard — format, out dir, --match, --new-only, --verbose, run-logging defaults) |
 | `subdl`               | `python3 -m canvas_tools.cli submissions download`                                                |
 | `subx`                | `python3 -m canvas_tools.cli submissions export`                                                  |
 | `subpull`             | `python3 -m canvas_tools.cli submissions pull` (subdl + subx combined into one --out directory)   |
