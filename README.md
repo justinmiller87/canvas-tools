@@ -710,8 +710,12 @@ python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/
   when you want everything for an assignment in one place:
   `<out>/submission_files/` (from `download`), `<out>/submissions.yaml`
   and `<out>/comment_attachments/` (from `export`). `--out` is optional
-  here — it defaults to `<assignment id>_<assignment name>` in the
-  current directory.
+  here — a single `--course X --assignment Y` pull, left out, defaults to
+  `<exports>/course_<id>_<course code>/submissions/<assignment>_<id>/` —
+  the same location `--all` and `course export --submissions` use —
+  regardless of your current directory, so running the command from
+  inside an existing assignment folder re-pulls into that same folder in
+  place instead of nesting a duplicate copy inside itself.
 
   `--course X --all` pulls every assignment in that one course instead of
   one (optionally filtered by `--match`, a case-insensitive substring

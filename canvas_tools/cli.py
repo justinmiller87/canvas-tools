@@ -2021,9 +2021,12 @@ def cmd_submissions_pull(args, c):
     files, the exported YAML, and any comment attachments.
 
     Single-assignment mode (`--course X --assignment Y`): `--out`, if
-    given, is the exact target directory; if omitted, defaults to
-    `<assignment name>_<id>` in the current directory (see
-    `assignment_dir_name`).
+    given, is the exact target directory. If omitted, defaults to
+    `<exports>/course_<id>_<code>/submissions/<assignment>_<id>/` — the
+    same location `--all` and `course export --submissions` use —
+    regardless of your current directory, so running this from inside an
+    existing assignment folder doesn't nest a duplicate copy inside
+    itself the way defaulting to a CWD-relative path would.
 
     `--course X --all` mode: pulls every assignment in that one course
     (optionally filtered by `--match`, a case-insensitive substring
@@ -2105,7 +2108,14 @@ def cmd_submissions_pull(args, c):
         raise CanvasError("--assignment is required unless --all is given")
     with open_run_log(c, args.course, "submissions", "export", settings=settings) as log:
         assignment = _resolve_assignment(c, args.course, args.assignment)
-        out_dir = args.out or assignment_dir_name(assignment)
+        if args.out:
+            out_dir = args.out
+        else:
+            course_code = c.get(f"courses/{args.course}").get("course_code")
+            out_dir = os.path.join(
+                default_out_root, _course_folder_name(args.course, course_code), "submissions", assignment_dir_name(assignment)
+            )
+            print(f"no --out given, defaulting to {out_dir}/ (same layout as `course export --submissions`)")
         pull_submissions(c, args.course, assignment, out_dir, verbose=args.verbose, new_only=new_only, log=log)
 
 
