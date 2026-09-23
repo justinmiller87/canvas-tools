@@ -40,6 +40,8 @@ from canvas_tools.export_course import (
     list_teaching_courses,
     _course_folder_name,
     _DEFAULT_OUT,
+    require_encrypted_out,
+    UnencryptedOutputError,
 )
 from datetime import datetime
 from canvas_tools.progress import Progress
@@ -2057,6 +2059,11 @@ def cmd_submissions_pull(args, c):
 
     settings = load_settings()
     default_out_root = settings["out_dir"] or _DEFAULT_OUT
+    if not args.out:
+        try:
+            require_encrypted_out(default_out_root, args.allow_unencrypted)
+        except UnencryptedOutputError as e:
+            raise CanvasError(str(e))
     if args.full_rebuild:
         new_only = False
     elif args.new_only is not None:
@@ -2377,6 +2384,12 @@ def build_parser():
         "directory each assignment's own '<name>_<id>' subfolder is created under — defaults to "
         "'<exports>/course_<id>_<code>/submissions/', the same location `course export --submissions` "
         "uses, rather than the current directory.",
+    )
+    p_sub_pull.add_argument(
+        "--allow-unencrypted",
+        action="store_true",
+        help="Skip the check that the default output location is inside the encrypted pCloud folder. "
+        "Only applies when --out isn't given.",
     )
     p_sub_pull.set_defaults(func=cmd_submissions_pull)
 

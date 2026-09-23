@@ -18,7 +18,13 @@ from canvas_tools.progress import Progress
 from canvas_tools.rubrics import export_rubrics_csv
 from canvas_tools.submissions import pull_submissions, assignment_dir_name, has_downloadable_submissions
 from canvas_tools.settings import load_settings
-from canvas_tools.course_paths import _DEFAULT_OUT, _course_folder_name, find_course_export_dir
+from canvas_tools.course_paths import (
+    _DEFAULT_OUT,
+    _course_folder_name,
+    find_course_export_dir,
+    require_encrypted_out,
+    UnencryptedOutputError,
+)
 from canvas_tools.run_log import open_run_log, vprint
 
 ASSIGNMENT_FIELDS = [
@@ -729,6 +735,12 @@ def main(argv=None):
         "preference if set, else both yaml and json for every resource. JSON files work with every "
         "`apply` command too, just without comments and without multi-line-friendly HTML.",
     )
+    p.add_argument(
+        "--allow-unencrypted",
+        action="store_true",
+        help="Skip the check that the output location is inside the encrypted pCloud folder "
+        "(for test runs; student data written elsewhere is NOT protected).",
+    )
     args = p.parse_args(argv)
 
     if args.match and not args.all:
@@ -740,6 +752,10 @@ def main(argv=None):
 
     settings = load_settings()
     out_parent = args.out or settings["out_dir"] or _DEFAULT_OUT
+    try:
+        require_encrypted_out(out_parent, args.allow_unencrypted)
+    except UnencryptedOutputError as e:
+        p.error(str(e))
     verbose = settings["verbose"] if args.verbose is None else args.verbose
     if args.full_rebuild:
         new_only = False
