@@ -2018,6 +2018,48 @@ def _pull_all_assignments(c, course_id, parent_out, match=None, verbose=False, n
     return len(assignments)
 
 
+def _parse_pull_targets(tokens):
+    """Turn positional `COURSE ASSIGNMENT... [, COURSE ASSIGNMENT...]` tokens
+    into [(course, [assignment, ...]), ...]. A comma (attached to a token or
+    standing alone) ends a course group; within a group the first token is
+    the course and the rest are assignments."""
+    groups, cur = [], []
+    for tok in tokens:
+        parts = tok.split(",")
+        for i, part in enumerate(parts):
+            if i > 0:
+                groups.append(cur)
+                cur = []
+            part = part.strip()
+            if part:
+                cur.append(part)
+    groups.append(cur)
+    out = []
+    for g in groups:
+        if not g:
+            continue
+        if not g[0].isdigit():
+            raise CanvasError(f"expected a course ID first in each group, got {g[0]!r}")
+        if len(g) < 2:
+            raise CanvasError(f"course {g[0]} has no assignment after it")
+        out.append((g[0], g[1:]))
+    return out
+
+
+def _pull_one_assignment(c, course_id, assignment_ref, out, default_out_root, settings, verbose, new_only):
+    with open_run_log(c, course_id, "submissions", "export", settings=settings) as log:
+        assignment = _resolve_assignment(c, course_id, assignment_ref)
+        if out:
+            out_dir = out
+        else:
+            course_code = c.get(f"courses/{course_id}").get("course_code")
+            out_dir = os.path.join(
+                default_out_root, _course_folder_name(course_id, course_code), "submissions", assignment_dir_name(assignment)
+            )
+            print(f"no --out given, defaulting to {out_dir}/ (same layout as `course export --submissions`)")
+        pull_submissions(c, course_id, assignment, out_dir, verbose=verbose, new_only=new_only, log=log)
+
+
 def cmd_submissions_pull(args, c):
     """`download` + `export` in one shot: the assignment's submission
     files, the exported YAML, and any comment attachments.
@@ -2046,12 +2088,19 @@ def cmd_submissions_pull(args, c):
     would, but without the assignments/pages/modules/etc. side of a full
     course export. Combine with `--new-only` for a routine "what's new
     across all my courses this week" pull."""
+    pairs = None
+    if args.targets:
+        if args.course or args.assignment or args.all or args.match:
+            raise CanvasError("positional COURSE ASSIGNMENT... can't be combined with --course/--assignment/--all/--match")
+        pairs = [(course, a) for course, refs in _parse_pull_targets(args.targets) for a in refs]
+        if args.out and len(pairs) > 1:
+            raise CanvasError("--out can only be used when pulling a single assignment")
     if args.assignment and args.all:
         raise CanvasError("--assignment and --all are mutually exclusive")
     if args.assignment and not args.course:
         raise CanvasError("--assignment requires --course (there's no single assignment to resolve across multiple courses)")
-    if not args.course and not args.all:
-        raise CanvasError("either --course or --all is required")
+    if not args.course and not args.all and pairs is None:
+        raise CanvasError("either --course, --all, or positional COURSE ASSIGNMENT... is required")
     if args.match and not args.all:
         raise CanvasError("--match only applies with --all")
     if args.new_only and args.full_rebuild:
@@ -2072,6 +2121,13 @@ def cmd_submissions_pull(args, c):
         new_only = settings["new_only"]
 
     policy = OverwritePolicy()
+
+    if pairs is not None:
+        for i, (course_id, ref) in enumerate(pairs):
+            if len(pairs) > 1:
+                print(f"\n=== [{i + 1}/{len(pairs)}] course {course_id}, assignment {ref} ===")
+            _pull_one_assignment(c, course_id, ref, args.out, default_out_root, settings, args.verbose, new_only)
+        return
 
     if not args.course:
         match = args.match or settings["match"]
@@ -2113,17 +2169,7 @@ def cmd_submissions_pull(args, c):
 
     if not args.assignment:
         raise CanvasError("--assignment is required unless --all is given")
-    with open_run_log(c, args.course, "submissions", "export", settings=settings) as log:
-        assignment = _resolve_assignment(c, args.course, args.assignment)
-        if args.out:
-            out_dir = args.out
-        else:
-            course_code = c.get(f"courses/{args.course}").get("course_code")
-            out_dir = os.path.join(
-                default_out_root, _course_folder_name(args.course, course_code), "submissions", assignment_dir_name(assignment)
-            )
-            print(f"no --out given, defaulting to {out_dir}/ (same layout as `course export --submissions`)")
-        pull_submissions(c, args.course, assignment, out_dir, verbose=args.verbose, new_only=new_only, log=log)
+    _pull_one_assignment(c, args.course, args.assignment, args.out, default_out_root, settings, args.verbose, new_only)
 
 
 def cmd_submissions_apply(args, c):
@@ -2340,6 +2386,14 @@ def build_parser():
         "pull",
         help="download + export combined: submission files, exported YAML, and comment attachment files, all under one directory",
         parents=[verbose_parent],
+    )
+    p_sub_pull.add_argument(
+        "targets",
+        nargs="*",
+        metavar="COURSE ASSIGNMENT...",
+        help="Shorthand for --course/--assignment: 'COURSE ASSIGNMENT [ASSIGNMENT ...]'. Separate "
+        "several courses with commas: '29457 928504 928502, 29460 926462'. Assignments may be IDs "
+        "or (quoted) exact names.",
     )
     p_sub_pull.add_argument(
         "--course",

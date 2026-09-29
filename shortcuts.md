@@ -68,6 +68,9 @@ courses --state unpublished
 subdl --course 10001 --assignment "Essay 1" --out submissions/essay1_files/
 subx --course 10001 --assignment "Essay 1" --out submissions/essay1.yaml
 subpull --course 10001 --assignment "Essay 1" --out submissions/essay1/
+subpull 10001 928504                        # shorthand for --course/--assignment
+subpull 10001 928504 928502                 # several assignments, one course
+subpull 10001 928504, 10002 926462          # comma separates courses
 subpull --course 10001 --all --new-only
 subpull --all --match "26/FA" --new-only
 subapply --course 10001 --file submissions/essay1.yaml --dry-run

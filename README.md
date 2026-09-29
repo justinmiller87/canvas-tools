@@ -631,12 +631,22 @@ below) for an `apply` input file — the shape `export`/`pull` also write.
 python3 -m canvas_tools.cli submissions download --course 10001 --assignment "Essay 1" --out submissions/essay1_files/
 python3 -m canvas_tools.cli submissions export --course 10001 --assignment "Essay 1" --out submissions/essay1.yaml
 python3 -m canvas_tools.cli submissions pull --course 10001 --assignment "Essay 1" --out submissions/essay1/
+python3 -m canvas_tools.cli submissions pull 10001 928504
+python3 -m canvas_tools.cli submissions pull 10001 928504 928502
+python3 -m canvas_tools.cli submissions pull 10001 928504, 10002 926462
 python3 -m canvas_tools.cli submissions pull --course 10001 --all --new-only
 python3 -m canvas_tools.cli submissions pull --all --match "26/FA" --new-only
 python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/essay1.yaml --dry-run
 python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/essay1.yaml
 ```
 
+- **`pull` shorthand** — instead of `--course X --assignment Y`, give
+  positional `COURSE ASSIGNMENT [ASSIGNMENT ...]`; a comma starts a new
+  course (`10001 928504 928502, 10002 926462`). Assignments can be IDs or
+  quoted exact names. Each is pulled in turn into its default
+  `<exports>/course_<id>_<code>/submissions/` location. Can't be combined
+  with `--course`/`--assignment`/`--all`/`--match`, and `--out` is only
+  allowed when pulling a single assignment.
 - **`download`** clears `<out>/` before writing — re-running it after a
   student resubmits isn't additive, it's a full rebuild, since the naming
   scheme below depends on how many attempts/files currently exist (a
