@@ -638,8 +638,12 @@ python3 -m canvas_tools.cli submissions pull --course 10001 --all --new-only
 python3 -m canvas_tools.cli submissions pull --all --match "26/FA" --new-only
 python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/essay1.yaml --dry-run
 python3 -m canvas_tools.cli submissions apply --course 10001 --file submissions/essay1.yaml
+python3 -m canvas_tools.cli submissions apply 10001 928504 submissions/essay1.yaml
 ```
 
+- **`apply` shorthand** — `apply COURSE ASSIGNMENT FILE` (always that
+  order, single assignment only) is equivalent to `--course`/`--assignment`/
+  `--file`; can't be mixed with those flags. `--dry-run` still works.
 - **`pull` shorthand** — instead of `--course X --assignment Y`, give
   positional `COURSE ASSIGNMENT [ASSIGNMENT ...]`; a comma starts a new
   course (`10001 928504 928502, 10002 926462`). Assignments can be IDs or

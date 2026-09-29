@@ -2173,6 +2173,14 @@ def cmd_submissions_pull(args, c):
 
 
 def cmd_submissions_apply(args, c):
+    if args.targets:
+        if args.course or args.assignment or args.file:
+            raise CanvasError("positional COURSE ASSIGNMENT FILE can't be combined with --course/--assignment/--file")
+        if len(args.targets) != 3:
+            raise CanvasError("expected exactly: COURSE ASSIGNMENT FILE")
+        args.course, args.assignment, args.file = args.targets
+    if not args.course or not args.file:
+        raise CanvasError("--course and --file are required (or give positional COURSE ASSIGNMENT FILE)")
     with open(args.file) as f:
         spec = yaml.safe_load(f)
 
@@ -2452,11 +2460,18 @@ def build_parser():
         help="Push posted_grade / rubric_assessment / comment back to Canvas from a YAML file, one PUT per student",
         parents=[verbose_parent],
     )
-    p_sub_apply.add_argument("--course", required=True, help="Canvas course ID")
+    p_sub_apply.add_argument(
+        "targets",
+        nargs="*",
+        metavar="COURSE ASSIGNMENT FILE",
+        help="Shorthand for --course/--assignment/--file, always in that order: "
+        "'12345 123456 file.yaml'. Assignment may be an ID or (quoted) exact name.",
+    )
+    p_sub_apply.add_argument("--course", help="Canvas course ID")
     p_sub_apply.add_argument(
         "--assignment", help="Assignment name (exact match) — optional if the file has a top-level `assignment:` key, as `export` writes"
     )
-    p_sub_apply.add_argument("--file", required=True, help="Path to a submissions YAML file (see `submissions export`)")
+    p_sub_apply.add_argument("--file", help="Path to a submissions YAML file (see `submissions export`)")
     p_sub_apply.add_argument("--dry-run", action="store_true")
     p_sub_apply.set_defaults(func=cmd_submissions_apply)
 

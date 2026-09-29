@@ -74,4 +74,5 @@ subpull 10001 928504, 10002 926462          # comma separates courses
 subpull --course 10001 --all --new-only
 subpull --all --match "26/FA" --new-only
 subapply --course 10001 --file submissions/essay1.yaml --dry-run
+subapply 10001 928504 submissions/essay1.yaml --dry-run   # shorthand: course assignment file
 ```
