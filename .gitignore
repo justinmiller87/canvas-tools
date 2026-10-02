@@ -15,3 +15,7 @@ venv/
 # exports/ is a symlink into the encrypted pCloud Crypto Folder (student data).
 # No trailing slash, so this matches the symlink as well as a real directory.
 /exports
+
+# Editor and IDE configurations
+.vscode/
+*.bak

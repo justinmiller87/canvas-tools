@@ -422,6 +422,8 @@ def apply_submissions(c, course_id, assignment_id, entries, dry_run=False, verbo
                     for crit in entry["rubric_assessment"]
                 }
             attachment_paths = entry.get("comment_attachments") or []
+            if isinstance(attachment_paths, str):
+                attachment_paths = [attachment_paths]
             if entry.get("comment") or attachment_paths:
                 comment = {}
                 if entry.get("comment"):

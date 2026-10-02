@@ -1,11 +1,17 @@
 import os
+import sys
 import time
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def _debug(msg):
+    if os.environ.get("CANVAS_DEBUG"):
+        print(f"[DEBUG] {msg}", file=sys.stderr)
 
 
 class CanvasError(RuntimeError):
@@ -28,10 +34,13 @@ class CanvasClient:
 
     def _request(self, method, path, **kwargs):
         url = self._url(path)
+        _debug(f"{method} {url}")
         resp = self.session.request(method, url, **kwargs)
         if resp.status_code == 403 and "rate limit" in resp.text.lower():
+            _debug("rate limited, sleeping 2s...")
             time.sleep(2)
             resp = self.session.request(method, url, **kwargs)
+        _debug(f"{method} {url} -> {resp.status_code}")
         if not resp.ok:
             raise CanvasError(f"{method} {url} -> {resp.status_code}: {resp.text[:500]}")
         return resp
@@ -62,13 +71,20 @@ class CanvasClient:
     def delete(self, path):
         return self._request("DELETE", path).json()
 
+    def _is_canvas_host(self, url):
+        netloc = urlparse(url).netloc
+        return not netloc or netloc == urlparse(self.base_url).netloc
+
     def download_file(self, url, dest_path):
         """Stream a Canvas file-attachment URL straight to disk. Attachment
-        URLs already carry their own signed `verifier` query param, so the
-        session's Bearer token isn't required — but sending it too is
-        harmless and keeps this on the same authenticated session/retry
-        path as every other request."""
-        resp = self.session.get(url, stream=True)
+        URLs already carry their own signed `verifier` query param. Avoid
+        sending the Canvas Authorization Bearer token to external storage/CDN hosts."""
+        is_canvas = self._is_canvas_host(url)
+        auth_desc = "Bearer token" if is_canvas else "none (pre-signed)"
+        _debug(f"download_file: GET {url} [target={urlparse(url).netloc}, auth={auth_desc}]")
+        getter = self.session.get if is_canvas else requests.get
+        resp = getter(url, stream=True)
+        _debug(f"download_file: -> {resp.status_code}")
         if not resp.ok:
             raise CanvasError(f"GET {url} -> {resp.status_code}: {resp.text[:500]}")
         with open(dest_path, "wb") as f:
@@ -81,13 +97,25 @@ class CanvasClient:
         negotiate an upload target (returns `upload_url` + `upload_params`),
         stream the file to it, then follow the redirect Canvas returns to
         finalize. Returns the resulting file object (with `id`)."""
+        _debug(f"upload_file step 1: negotiating target for {file_path} via {path}")
         negotiate = self.post(path, json={"name": os.path.basename(file_path), "size": os.path.getsize(file_path)})
+        upload_url = negotiate["upload_url"]
+        is_canvas = self._is_canvas_host(upload_url)
+        auth_desc = "Bearer token" if is_canvas else "none (pre-signed S3)"
+        _debug(f"upload_file step 2: POST {upload_url} [target={urlparse(upload_url).netloc}, auth={auth_desc}]")
+        post_headers = {"Authorization": f"Bearer {self.token}"} if is_canvas else {}
         with open(file_path, "rb") as f:
-            resp = self.session.post(
-                negotiate["upload_url"], data=negotiate.get("upload_params") or {}, files={"file": f}, allow_redirects=False
+            resp = requests.post(
+                upload_url, data=negotiate.get("upload_params") or {}, files={"file": f}, headers=post_headers, allow_redirects=False
             )
+        _debug(f"upload_file step 2: -> {resp.status_code}")
         if resp.status_code in (301, 302, 303, 307, 308):
-            resp = self.session.get(resp.headers["Location"])
+            loc = resp.headers["Location"]
+            is_canvas_loc = self._is_canvas_host(loc)
+            loc_auth = "Bearer token" if is_canvas_loc else "none"
+            _debug(f"upload_file step 3: redirect to {loc} [target={urlparse(loc).netloc}, auth={loc_auth}]")
+            resp = self.session.get(loc) if is_canvas_loc else requests.get(loc)
+            _debug(f"upload_file step 3: -> {resp.status_code}")
         if not resp.ok:
             raise CanvasError(f"upload {file_path} -> {resp.status_code}: {resp.text[:500]}")
         return resp.json()
