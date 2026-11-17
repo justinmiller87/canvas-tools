@@ -540,12 +540,15 @@ def export_modules(c, course_id):
 
 
 def list_teaching_courses(c, match=None):
-    """Every course you teach that's currently available, optionally
-    filtered by `match` — a case-insensitive substring against each
-    course's code or name (e.g. 'FY/26' to match just one term). Shared by
-    `export_course --all` and `submissions pull` (when it's run without
-    `--course`, sweeping every course you teach instead of one)."""
-    courses = c.get("courses", params={"per_page": 100, "enrollment_type": "teacher", "state[]": "available"})
+    """Every course you teach — unpublished, available, or completed —
+    optionally filtered by `match` — a case-insensitive substring against
+    each course's code or name (e.g. 'FY/26' to match just one term).
+    Shared by `export_course --all` and `submissions pull` (when it's run
+    without `--course`, sweeping every course you teach instead of one)."""
+    courses = c.get(
+        "courses",
+        params={"per_page": 100, "enrollment_type": "teacher", "state[]": ["unpublished", "available", "completed"]},
+    )
     if match:
         needle = match.lower()
         matched = [co for co in courses if needle in (co.get("course_code") or "").lower() or needle in (co.get("name") or "").lower()]

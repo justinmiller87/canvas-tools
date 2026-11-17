@@ -110,7 +110,8 @@ def cmd_courses_list(args, c):
     params = {"per_page": 100}
     if args.term:
         params["enrollment_type"] = "teacher"
-    courses = c.get("courses", params={**params, "enrollment_type": "teacher", "state[]": args.state})
+    state = ["unpublished", "available", "completed"] if args.state == "all" else args.state
+    courses = c.get("courses", params={**params, "enrollment_type": "teacher", "state[]": state})
     courses.sort(key=lambda x: x.get("name") or "")
     for co in courses:
         print(f"{co['id']}\t{co.get('course_code', ''):20s}\t{co.get('name')}")
@@ -2232,7 +2233,9 @@ def build_parser():
     p_courses = sub.add_parser("courses", help="Course operations")
     sub_courses = p_courses.add_subparsers(dest="subcommand", required=True)
     p_courses_list = sub_courses.add_parser("list", help="List your courses")
-    p_courses_list.add_argument("--state", default="available", help="Course state filter (default: available)")
+    p_courses_list.add_argument(
+        "--state", default="available", help="Course state filter (default: available; 'all' for unpublished+available+completed)"
+    )
     p_courses_list.add_argument("--term", action="store_true", help="(reserved) filter by current term")
     p_courses_list.set_defaults(func=cmd_courses_list)
 
