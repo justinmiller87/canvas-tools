@@ -64,6 +64,7 @@ annpost --courses 10001 10002 --title "Midterm reminder" --message "<p>...</p>"
 
 courses
 courses --state unpublished
+courses --state all
 
 subdl --course 10001 --assignment "Essay 1" --out submissions/essay1_files/
 subx --course 10001 --assignment "Essay 1" --out submissions/essay1.yaml

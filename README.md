@@ -229,9 +229,14 @@ Off by default; nothing here does anything until you turn it on via
 ```
 python3 -m canvas_tools.cli courses list
 python3 -m canvas_tools.cli courses list --state unpublished
+python3 -m canvas_tools.cli courses list --state all
 ```
 
 Prints `id  course_code  name` — grab the ID for use in other commands.
+Defaults to `--state available`, same as Canvas's own "Published" filter —
+a freshly created term shell is `unpublished` and won't show up until you
+publish it or pass `--state unpublished`/`--state all` (the latter covers
+unpublished, available, and completed in one call).
 
 ### Export an existing course from Canvas to local files
 
@@ -264,10 +269,11 @@ python3 -m canvas_tools.export_course --course 10001 --out exports --format yaml
 ```
 
 `--course` takes one or more course IDs — each gets exported in turn, its
-own subfolder, in a single run. `--all` exports every course you teach
-(anything Canvas returns as `state: available` for your teacher
-enrollments) instead of listing IDs by hand — useful for an initial sync
-onto a new machine. `--course` and `--all` are mutually exclusive. In a
+own subfolder, in a single run. `--all` exports every course you teach —
+`unpublished`, `available`, or `completed` for your teacher enrollments —
+instead of listing IDs by hand — useful for an initial sync onto a new
+machine, including term shells you haven't published yet. `--course` and
+`--all` are mutually exclusive. In a
 multi-course run, one course failing (e.g. a bad ID) prints an error and
 continues on to the rest rather than aborting the whole run; a summary of
 how many succeeded prints at the end.
